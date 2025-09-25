@@ -1,0 +1,74 @@
+#pragma once
+
+#include <memory>
+
+#include <juce_audio_processors/juce_audio_processors.h>
+
+#include "LockFreeRing.h"
+#include "ModelBackend.h"
+#include "OnsetDetector.h"
+#include "Workers.h"
+
+class NeuralMorphingAudioProcessor : public juce::AudioProcessor
+{
+public:
+    NeuralMorphingAudioProcessor();
+    ~NeuralMorphingAudioProcessor() override;
+
+    //==============================================================================
+    void prepareToPlay(double sampleRate, int samplesPerBlock) override;
+    void releaseResources() override;
+
+    bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
+
+    void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+
+    juce::AudioProcessorEditor* createEditor() override;
+    bool hasEditor() const override { return true; }
+
+    //==============================================================================
+    const juce::String getName() const override;
+
+    bool acceptsMidi() const override { return false; }
+    bool producesMidi() const override { return false; }
+    bool isMidiEffect() const override { return false; }
+    double getTailLengthSeconds() const override { return 0.0; }
+
+    //==============================================================================
+    int getNumPrograms() override { return 1; }
+    int getCurrentProgram() override { return 0; }
+    void setCurrentProgram(int) override {}
+    const juce::String getProgramName(int) override { return {}; }
+    void changeProgramName(int, const juce::String&) override {}
+
+    //==============================================================================
+    void getStateInformation(juce::MemoryBlock& destData) override;
+    void setStateInformation(const void* data, int sizeInBytes) override;
+
+    float getParam(const juce::String& paramID) const;
+
+    juce::AudioProcessorValueTreeState parameters;
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
+    PaletteWorker* getPaletteWorker() const { return paletteWorker_.get(); }
+    MatchWorker* getMatchWorker() const { return matchWorker_.get(); }
+
+private:
+    void refreshBackendSampleRate(double sampleRate);
+    void mixWetBuffer(juce::AudioBuffer<float>& buffer, juce::AudioBuffer<float>& dryBuffer);
+    void initialiseBackend();
+
+    std::unique_ptr<ModelBackend> backend_;
+    std::unique_ptr<PaletteIndex> paletteIndex_;
+    LockFreeRing<juce::AudioBuffer<float>> decodedFifo_;
+    std::unique_ptr<PaletteWorker> paletteWorker_;
+    std::unique_ptr<MatchWorker> matchWorker_;
+
+    OnsetDetector onsetDetector_;
+    juce::AudioBuffer<float> monoScratch_;
+
+    double currentSampleRate_ = 44100.0;
+    int samplesPerBlock_ = 0;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NeuralMorphingAudioProcessor)
+};

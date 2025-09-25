@@ -1,0 +1,88 @@
+cmake_minimum_required(VERSION 3.22)
+project(NeuralMorphing VERSION 0.1.0)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# Expect JUCE to be present as a subdirectory. You can alternatively fetch it via CPM.
+add_subdirectory(JUCE)
+
+set(SOURCE_FILES
+    Source/PluginProcessor.cpp
+    Source/PluginProcessor.h
+    Source/PluginEditor.cpp
+    Source/PluginEditor.h
+    Source/LockFreeRing.h
+    Source/ModelBackend.cpp
+    Source/ModelBackend.h
+    Source/PaletteIndex.cpp
+    Source/PaletteIndex.h
+    Source/OnsetDetector.cpp
+    Source/OnsetDetector.h
+    Source/Workers.cpp
+    Source/Workers.h
+)
+
+juce_add_plugin(NeuralMorphing
+    COMPANY_NAME "NeuralMorph"
+    BUNDLE_ID com.neuralmorph.plugin
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_OUTPUT FALSE
+    IS_MIDI_EFFECT FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    COPY_PLUGIN_AFTER_BUILD TRUE
+    FORMATS VST3 AU
+    PRODUCT_NAME "Neural Morphing"
+)
+
+target_sources(NeuralMorphing PRIVATE ${SOURCE_FILES})
+
+target_compile_definitions(NeuralMorphing
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+)
+
+juce_generate_juce_header(NeuralMorphing)
+
+target_link_libraries(NeuralMorphing PRIVATE
+    juce::juce_audio_basics
+    juce::juce_audio_devices
+    juce::juce_audio_formats
+    juce::juce_audio_processors
+    juce::juce_audio_utils
+    juce::juce_dsp
+    juce::juce_gui_basics
+    juce::juce_gui_extra
+    juce::juce_data_structures
+)
+
+option(NEURAL_MORPHING_ENABLE_ONNX "Build with ONNX Runtime backend" ON)
+if (NEURAL_MORPHING_ENABLE_ONNX)
+    find_package(onnxruntime QUIET)
+    if (onnxruntime_FOUND)
+        target_compile_definitions(NeuralMorphing PRIVATE NM_HAS_ONNX=1)
+        target_link_libraries(NeuralMorphing PRIVATE onnxruntime::onnxruntime)
+        target_sources(NeuralMorphing PRIVATE
+            Source/ModelBackendOnnx.cpp
+            Source/ModelBackendOnnx.h
+        )
+        message(STATUS "ONNX Runtime backend enabled")
+    else()
+        target_compile_definitions(NeuralMorphing PRIVATE NM_HAS_ONNX=0)
+        message(WARNING "ONNX Runtime not found; building with stub backend only")
+    endif()
+else()
+    target_compile_definitions(NeuralMorphing PRIVATE NM_HAS_ONNX=0)
+endif()
+
+# Installation helpers: copy the built VST3 to typical locations.
+if (APPLE)
+    set(_vst_dest "$ENV{HOME}/Library/Audio/Plug-Ins/VST3")
+    install(DIRECTORY "${CMAKE_BINARY_DIR}/NeuralMorphing_artefacts/VST3/" DESTINATION "${_vst_dest}" USE_SOURCE_PERMISSIONS)
+elseif (WIN32)
+    set(_vst_dest "$ENV{APPDATA}/VST3")
+    install(DIRECTORY "${CMAKE_BINARY_DIR}/NeuralMorphing_artefacts/VST3/" DESTINATION "${_vst_dest}" USE_SOURCE_PERMISSIONS)
+endif()
