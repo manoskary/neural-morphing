@@ -91,7 +91,7 @@ void PaletteWorker::processFiles()
             continue;
         }
 
-        const int64 length = static_cast<int64>(reader->lengthInSamples);
+        const juce::int64 length = static_cast<juce::int64>(reader->lengthInSamples);
         if (length <= 0)
             continue;
 

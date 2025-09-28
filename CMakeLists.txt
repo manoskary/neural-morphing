@@ -33,7 +33,7 @@ juce_add_plugin(NeuralMorphing
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     COPY_PLUGIN_AFTER_BUILD TRUE
-    FORMATS VST3 AU
+    FORMATS VST3
     PRODUCT_NAME "Neural Morphing"
 )
 
@@ -43,6 +43,7 @@ target_compile_definitions(NeuralMorphing
     PUBLIC
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
+        JUCE_IGNORE_VST3_MISMATCHED_PARAMETER_ID_WARNING=1
 )
 
 juce_generate_juce_header(NeuralMorphing)

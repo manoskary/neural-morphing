@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
+#include "JuceHeader.h"
 
 NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMorphingAudioProcessor& p)
     : juce::AudioProcessorEditor(&p), processor_(p)
@@ -92,21 +93,27 @@ void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
     if (button == &loadButton_)
     {
         juce::String initialPath = lastDirectory_.exists() ? lastDirectory_.getFullPathName() : juce::File::getSpecialLocation(juce::File::userHomeDirectory).getFullPathName();
-        juce::FileChooser chooser("Select palette audio", juce::File(initialPath), "*.wav;*.flac;*.mp3;*.aiff;*.ogg");
-        if (chooser.browseForMultipleFilesToOpen())
-        {
-            auto results = chooser.getResults();
-            lastFiles_.clear();
-            for (auto& file : results)
-                lastFiles_.push_back(file);
+        
+        // Use the asynchronous version for better compatibility
+        auto chooser = std::make_unique<juce::FileChooser>("Select palette audio", juce::File(initialPath), "*.wav;*.flac;*.mp3;*.aiff;*.ogg");
+        chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                           [this, chooserPtr = chooser.get()](const juce::FileChooser& fc)
+                           {
+                               auto result = fc.getResult();
+                               if (result != juce::File{})
+                               {
+                                   lastFiles_.clear();
+                                   lastFiles_.push_back(result);
 
-            if (!lastFiles_.empty())
-            {
-                lastDirectory_ = lastFiles_.front().getParentDirectory();
-                if (auto* worker = processor_.getPaletteWorker())
-                    worker->requestBuild(lastFiles_, true);
-            }
-        }
+                                   if (!lastFiles_.empty())
+                                   {
+                                       lastDirectory_ = lastFiles_.front().getParentDirectory();
+                                       if (auto* worker = processor_.getPaletteWorker())
+                                           worker->requestBuild(lastFiles_, true);
+                                   }
+                               }
+                           });
+        chooser.release(); // FileChooser will manage its own lifetime
     }
     else if (button == &clearButton_)
     {

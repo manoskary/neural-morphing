@@ -86,5 +86,5 @@ public:
 
 private:
     double ratio_ = 1.0;
-    juce::dsp::LagrangeInterpolator interpolator_;
+    juce::LagrangeInterpolator interpolator_;
 };

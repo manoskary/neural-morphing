@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "JuceHeader.h"
 #if NM_HAS_ONNX
 #include "ModelBackendOnnx.h"
 #endif
@@ -40,7 +41,7 @@ NeuralMorphingAudioProcessor::~NeuralMorphingAudioProcessor()
 
 const juce::String NeuralMorphingAudioProcessor::getName() const
 {
-    return JUCE_APPLICATION_NAME_STRING;
+    return ProjectInfo::projectName;
 }
 
 void NeuralMorphingAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
@@ -147,7 +148,8 @@ juce::AudioProcessorEditor* NeuralMorphingAudioProcessor::createEditor()
 void NeuralMorphingAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     auto state = parameters.copyState();
-    std::unique_ptr<juce::XmlElement> xml(state.createXml("NeuralMorphingState"));
+    std::unique_ptr<juce::XmlElement> xml(state.createXml());
+    xml->setAttribute("pluginName", "NeuralMorphingState");
     copyXmlToBinary(*xml, destData);
 }
 
@@ -218,4 +220,11 @@ void NeuralMorphingAudioProcessor::initialiseBackend()
 
     const int vectorDim = (backend_ != nullptr) ? juce::jmax(1, backend_->embeddingDimension()) : 2;
     paletteIndex_ = std::make_unique<PaletteIndex>(vectorDim);
+}
+
+//==============================================================================
+// This creates new instances of the plugin..
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
+{
+    return new NeuralMorphingAudioProcessor();
 }
