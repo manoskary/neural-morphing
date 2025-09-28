@@ -5,7 +5,7 @@
 NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMorphingAudioProcessor& p)
     : juce::AudioProcessorEditor(&p), processor_(p)
 {
-    setSize(640, 360);
+    setSize(640, 420); // Increased height to accommodate backend selector
 
     addAndMakeVisible(loadButton_);
     addAndMakeVisible(clearButton_);
@@ -31,12 +31,29 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     dryWetAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor_.parameters, "dryWet", dryWetSlider_);
     outputAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor_.parameters, "outputGain", outputSlider_);
 
+    // Setup backend selector
+    addAndMakeVisible(backendSelector_);
+    addAndMakeVisible(backendLabel_);
+    addAndMakeVisible(statusDisplayLabel_);
+    
+    backendSelector_.addItem("Native", 1);
+#if NM_WITH_PYBRIDGE
+    backendSelector_.addItem("Python Bridge", 2);
+#endif
+    
+    backendAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor_.parameters, "backend", backendSelector_);
+    
+    backendLabel_.attachToComponent(&backendSelector_, true);
+    statusDisplayLabel_.setJustificationType(juce::Justification::centredLeft);
+    statusDisplayLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+
     statusLabel_.setJustificationType(juce::Justification::centredLeft);
     progressLabel_.setJustificationType(juce::Justification::centredLeft);
 
     loadButton_.addListener(this);
     clearButton_.addListener(this);
     rebuildButton_.addListener(this);
+    backendSelector_.addListener(this);
 
     startTimerHz(10);
 }
@@ -47,6 +64,7 @@ NeuralMorphingAudioProcessorEditor::~NeuralMorphingAudioProcessorEditor()
     loadButton_.removeListener(this);
     clearButton_.removeListener(this);
     rebuildButton_.removeListener(this);
+    backendSelector_.removeListener(this);
 }
 
 void NeuralMorphingAudioProcessorEditor::paint(juce::Graphics& g)
@@ -69,6 +87,14 @@ void NeuralMorphingAudioProcessorEditor::resized()
     auto statusArea = area.removeFromTop(24);
     statusLabel_.setBounds(statusArea.removeFromLeft(getWidth() / 2));
     progressLabel_.setBounds(statusArea);
+
+    // Backend selector area
+    auto backendArea = area.removeFromTop(32);
+    backendSelector_.setBounds(backendArea.removeFromLeft(200).reduced(2));
+    
+    // Backend status area
+    auto backendStatusArea = area.removeFromTop(24);
+    statusDisplayLabel_.setBounds(backendStatusArea.reduced(2));
 
     auto sliderArea = area.reduced(0, 10);
     const int numColumns = 4;
@@ -128,6 +154,15 @@ void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
     }
 }
 
+void NeuralMorphingAudioProcessorEditor::comboBoxChanged(juce::ComboBox* comboBox)
+{
+    if (comboBox == &backendSelector_)
+    {
+        int backendIndex = backendSelector_.getSelectedItemIndex();
+        processor_.switchBackend(backendIndex);
+    }
+}
+
 void NeuralMorphingAudioProcessorEditor::timerCallback()
 {
     juce::String statusText = "Idle";
@@ -150,6 +185,10 @@ void NeuralMorphingAudioProcessorEditor::timerCallback()
 
     statusLabel_.setText(statusText, juce::dontSendNotification);
     progressLabel_.setText(progressText, juce::dontSendNotification);
+    
+    // Update backend status
+    juce::String backendStatus = processor_.getBackendStatus();
+    statusDisplayLabel_.setText(backendStatus, juce::dontSendNotification);
 }
 
 void NeuralMorphingAudioProcessorEditor::setupSlider(juce::Slider& slider, const juce::String& name)

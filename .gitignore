@@ -1,0 +1,29 @@
+# Build artifacts
+build/
+*.o
+*.so
+*.a
+*.dylib
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+env/
+
+# Temporary files
+*.tmp
+*.temp

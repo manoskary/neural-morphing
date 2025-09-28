@@ -1052,6 +1052,7 @@ NeuralMorphing_artefacts/VST3/Neural\ Morphing.vst3/Contents/x86_64-linux/Neural
   /usr/lib/x86_64-linux-gnu/crti.o \
   /usr/lib/x86_64-linux-gnu/crtn.o \
   /usr/lib/x86_64-linux-gnu/libc.so \
+  /usr/lib/x86_64-linux-gnu/libcurl.so \
   /usr/lib/x86_64-linux-gnu/libdl.a \
   /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 \
   /usr/lib/x86_64-linux-gnu/libm.so \
@@ -1459,6 +1460,8 @@ CMakeFiles/NeuralMorphing_VST3.dir/JUCE/modules/juce_audio_plugin_client/juce_au
 /usr/include/c++/13/bits/stl_iterator_base_types.h:
 
 /usr/include/c++/13/bits/stl_iterator_base_funcs.h:
+
+/usr/lib/x86_64-linux-gnu/libcurl.so:
 
 /usr/include/c++/13/bits/stl_heap.h:
 
