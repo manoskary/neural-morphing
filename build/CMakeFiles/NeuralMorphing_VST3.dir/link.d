@@ -16,6 +16,7 @@ NeuralMorphing_artefacts/VST3/Neural Morphing.vst3/Contents/x86_64-linux/Neural 
   /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/librt.a \
   /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/libdl.a \
   /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/libpthread.a \
+  /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/libcurl.so \
   /usr/lib/gcc/x86_64-linux-gnu/13/libstdc++.so \
   /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/libm.so \
   /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/libm.so \
@@ -74,6 +75,8 @@ NeuralMorphing_artefacts/libNeural Morphing_SharedCode.a:
 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/libdl.a:
 
 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/libpthread.a:
+
+/usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/libcurl.so:
 
 /usr/lib/gcc/x86_64-linux-gnu/13/libstdc++.so:
 

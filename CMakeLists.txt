@@ -42,7 +42,7 @@ target_sources(NeuralMorphing PRIVATE ${SOURCE_FILES})
 target_compile_definitions(NeuralMorphing
     PUBLIC
         JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0
+        JUCE_USE_CURL=1
         JUCE_IGNORE_VST3_MISMATCHED_PARAMETER_ID_WARNING=1
 )
 
@@ -61,6 +61,7 @@ target_link_libraries(NeuralMorphing PRIVATE
 )
 
 option(NEURAL_MORPHING_ENABLE_ONNX "Build with ONNX Runtime backend" ON)
+option(NM_WITH_PYBRIDGE "Build with Python bridge HTTP backend" ON)
 if (NEURAL_MORPHING_ENABLE_ONNX)
     find_package(onnxruntime QUIET)
     if (onnxruntime_FOUND)
@@ -77,6 +78,25 @@ if (NEURAL_MORPHING_ENABLE_ONNX)
     endif()
 else()
     target_compile_definitions(NeuralMorphing PRIVATE NM_HAS_ONNX=0)
+endif()
+
+# Python Bridge HTTP backend
+if (NM_WITH_PYBRIDGE)
+    target_compile_definitions(NeuralMorphing PRIVATE NM_WITH_PYBRIDGE=1)
+    target_sources(NeuralMorphing PRIVATE
+        Source/ModelBackendHttp.cpp
+        Source/ModelBackendHttp.h
+    )
+    # Link curl for HTTP functionality
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(CURL REQUIRED libcurl)
+    target_link_libraries(NeuralMorphing PRIVATE ${CURL_LIBRARIES})
+    target_include_directories(NeuralMorphing PRIVATE ${CURL_INCLUDE_DIRS})
+    target_compile_options(NeuralMorphing PRIVATE ${CURL_CFLAGS_OTHER})
+    message(STATUS "Python bridge HTTP backend enabled")
+else()
+    target_compile_definitions(NeuralMorphing PRIVATE NM_WITH_PYBRIDGE=0)
+    message(STATUS "Python bridge HTTP backend disabled")
 endif()
 
 # Installation helpers: copy the built VST3 to typical locations.

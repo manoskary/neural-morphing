@@ -35,6 +35,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/NeuralMorphing.dir/JUCE/modules/juce_gui_extra/juce_gui_extra.cpp.o.d"
   "CMakeFiles/NeuralMorphing.dir/Source/ModelBackend.cpp.o"
   "CMakeFiles/NeuralMorphing.dir/Source/ModelBackend.cpp.o.d"
+  "CMakeFiles/NeuralMorphing.dir/Source/ModelBackendHttp.cpp.o"
+  "CMakeFiles/NeuralMorphing.dir/Source/ModelBackendHttp.cpp.o.d"
   "CMakeFiles/NeuralMorphing.dir/Source/OnsetDetector.cpp.o"
   "CMakeFiles/NeuralMorphing.dir/Source/OnsetDetector.cpp.o.d"
   "CMakeFiles/NeuralMorphing.dir/Source/PaletteIndex.cpp.o"

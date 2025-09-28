@@ -862,6 +862,30 @@ Source/ModelBackend.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/NeuralMorphing.dir/build.make CMakeFiles/NeuralMorphing.dir/Source/ModelBackend.cpp.s
 .PHONY : Source/ModelBackend.cpp.s
 
+Source/ModelBackendHttp.o: Source/ModelBackendHttp.cpp.o
+.PHONY : Source/ModelBackendHttp.o
+
+# target to build an object file
+Source/ModelBackendHttp.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/NeuralMorphing.dir/build.make CMakeFiles/NeuralMorphing.dir/Source/ModelBackendHttp.cpp.o
+.PHONY : Source/ModelBackendHttp.cpp.o
+
+Source/ModelBackendHttp.i: Source/ModelBackendHttp.cpp.i
+.PHONY : Source/ModelBackendHttp.i
+
+# target to preprocess a source file
+Source/ModelBackendHttp.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/NeuralMorphing.dir/build.make CMakeFiles/NeuralMorphing.dir/Source/ModelBackendHttp.cpp.i
+.PHONY : Source/ModelBackendHttp.cpp.i
+
+Source/ModelBackendHttp.s: Source/ModelBackendHttp.cpp.s
+.PHONY : Source/ModelBackendHttp.s
+
+# target to generate assembly for a file
+Source/ModelBackendHttp.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/NeuralMorphing.dir/build.make CMakeFiles/NeuralMorphing.dir/Source/ModelBackendHttp.cpp.s
+.PHONY : Source/ModelBackendHttp.cpp.s
+
 Source/OnsetDetector.o: Source/OnsetDetector.cpp.o
 .PHONY : Source/OnsetDetector.o
 
@@ -1079,6 +1103,9 @@ help:
 	@echo "... Source/ModelBackend.o"
 	@echo "... Source/ModelBackend.i"
 	@echo "... Source/ModelBackend.s"
+	@echo "... Source/ModelBackendHttp.o"
+	@echo "... Source/ModelBackendHttp.i"
+	@echo "... Source/ModelBackendHttp.s"
 	@echo "... Source/OnsetDetector.o"
 	@echo "... Source/OnsetDetector.i"
 	@echo "... Source/OnsetDetector.s"

@@ -13,7 +13,7 @@
   },
   "Classes": [
     {
-      "CID": "565354576376786E657572616C206D6F",
+      "CID": "565354596A73796E657572616C206D6F",
       "Category": "Audio Module Class",
       "Name": "Neural Morphing",
       "Vendor": "NeuralMorph",
@@ -28,7 +28,7 @@
       ],
     },
     {
-      "CID": "565345576376786E657572616C206D6F",
+      "CID": "565345596A73796E657572616C206D6F",
       "Category": "Component Controller Class",
       "Name": "Neural Morphing",
       "Vendor": "NeuralMorph",

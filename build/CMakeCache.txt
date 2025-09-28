@@ -270,6 +270,9 @@ JUCE_WEBVIEW2_PACKAGE_LOCATION:BOOL=OFF
 //Build with ONNX Runtime backend
 NEURAL_MORPHING_ENABLE_ONNX:BOOL=OFF
 
+//Build with Python bridge HTTP backend
+NM_WITH_PYBRIDGE:BOOL=ON
+
 //Value Computed by CMake
 NeuralMorphing_BINARY_DIR:STATIC=/home/runner/work/neural-morphing/neural-morphing/build
 
@@ -284,6 +287,9 @@ PKG_CONFIG_ARGN:STRING=
 
 //pkg-config executable
 PKG_CONFIG_EXECUTABLE:FILEPATH=/usr/bin/pkg-config
+
+//Path to a library.
+pkgcfg_lib_CURL_curl:FILEPATH=/usr/lib/x86_64-linux-gnu/libcurl.so
 
 //Path to a library.
 pkgcfg_lib_JUCE_CURL_LINUX_DEPS_curl:FILEPATH=/usr/lib/x86_64-linux-gnu/libcurl.so
@@ -452,6 +458,41 @@ CMAKE_TAPI-ADVANCED:INTERNAL=1
 CMAKE_UNAME:INTERNAL=/usr/bin/uname
 //ADVANCED property for variable: CMAKE_VERBOSE_MAKEFILE
 CMAKE_VERBOSE_MAKEFILE-ADVANCED:INTERNAL=1
+CURL_CFLAGS:INTERNAL=-I/usr/include/x86_64-linux-gnu
+CURL_CFLAGS_I:INTERNAL=
+CURL_CFLAGS_OTHER:INTERNAL=
+CURL_FOUND:INTERNAL=1
+CURL_INCLUDEDIR:INTERNAL=/usr/include/x86_64-linux-gnu
+CURL_INCLUDE_DIRS:INTERNAL=/usr/include/x86_64-linux-gnu
+CURL_LDFLAGS:INTERNAL=-L/usr/lib/x86_64-linux-gnu;-lcurl
+CURL_LDFLAGS_OTHER:INTERNAL=
+CURL_LIBDIR:INTERNAL=/usr/lib/x86_64-linux-gnu
+CURL_LIBRARIES:INTERNAL=curl
+CURL_LIBRARY_DIRS:INTERNAL=/usr/lib/x86_64-linux-gnu
+CURL_LIBS:INTERNAL=
+CURL_LIBS_L:INTERNAL=
+CURL_LIBS_OTHER:INTERNAL=
+CURL_LIBS_PATHS:INTERNAL=
+CURL_MODULE_NAME:INTERNAL=libcurl
+CURL_PREFIX:INTERNAL=/usr
+CURL_STATIC_CFLAGS:INTERNAL=-I/usr/include/x86_64-linux-gnu
+CURL_STATIC_CFLAGS_I:INTERNAL=
+CURL_STATIC_CFLAGS_OTHER:INTERNAL=
+CURL_STATIC_INCLUDE_DIRS:INTERNAL=/usr/include/x86_64-linux-gnu
+CURL_STATIC_LDFLAGS:INTERNAL=-L/usr/lib/x86_64-linux-gnu;-lcurl;-lnghttp2;-lidn2;-lrtmp;-lssh;-lssh;-lpsl;-lssl;-lcrypto;-lssl;-lcrypto;-lgssapi_krb5;-llber;-lldap;-llber;-lzstd;-lbrotlidec;-lz
+CURL_STATIC_LDFLAGS_OTHER:INTERNAL=
+CURL_STATIC_LIBDIR:INTERNAL=
+CURL_STATIC_LIBRARIES:INTERNAL=curl;nghttp2;idn2;rtmp;ssh;ssh;psl;ssl;crypto;ssl;crypto;gssapi_krb5;lber;ldap;lber;zstd;brotlidec;z
+CURL_STATIC_LIBRARY_DIRS:INTERNAL=/usr/lib/x86_64-linux-gnu
+CURL_STATIC_LIBS:INTERNAL=
+CURL_STATIC_LIBS_L:INTERNAL=
+CURL_STATIC_LIBS_OTHER:INTERNAL=
+CURL_STATIC_LIBS_PATHS:INTERNAL=
+CURL_VERSION:INTERNAL=8.5.0
+CURL_libcurl_INCLUDEDIR:INTERNAL=
+CURL_libcurl_LIBDIR:INTERNAL=
+CURL_libcurl_PREFIX:INTERNAL=
+CURL_libcurl_VERSION:INTERNAL=
 //Details about finding PkgConfig
 FIND_PACKAGE_MESSAGE_DETAILS_PkgConfig:INTERNAL=[/usr/bin/pkg-config][v1.8.1()]
 JUCE_BROWSER_LINUX_DEPS_CFLAGS:INTERNAL=
@@ -537,10 +578,12 @@ _CMAKE_CXX_LINKER_PUSHPOP_STATE_SUPPORTED:INTERNAL=TRUE
 _CMAKE_C_LINKER_PUSHPOP_STATE_SUPPORTED:INTERNAL=TRUE
 //linker supports push/pop state
 _CMAKE_LINKER_PUSHPOP_STATE_SUPPORTED:INTERNAL=TRUE
+__pkg_config_arguments_CURL:INTERNAL=REQUIRED;libcurl
 __pkg_config_arguments_JUCE_CURL_LINUX_DEPS:INTERNAL=libcurl
 __pkg_config_arguments_juce_audio_devices_LINUX_DEPS:INTERNAL=alsa
 __pkg_config_arguments_juce_graphics_LINUX_DEPS:INTERNAL=freetype2;fontconfig
 __pkg_config_arguments_juce_opengl_LINUX_DEPS:INTERNAL=gl
+__pkg_config_checked_CURL:INTERNAL=1
 __pkg_config_checked_JUCE_BROWSER_LINUX_DEPS:INTERNAL=1
 __pkg_config_checked_JUCE_CURL_LINUX_DEPS:INTERNAL=1
 __pkg_config_checked_juce_audio_devices_LINUX_DEPS:INTERNAL=1
@@ -685,6 +728,8 @@ package_to_be_found_webkit2gtk-4.1_INCLUDEDIR:INTERNAL=
 package_to_be_found_webkit2gtk-4.1_LIBDIR:INTERNAL=
 package_to_be_found_webkit2gtk-4.1_PREFIX:INTERNAL=
 package_to_be_found_webkit2gtk-4.1_VERSION:INTERNAL=
+//ADVANCED property for variable: pkgcfg_lib_CURL_curl
+pkgcfg_lib_CURL_curl-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: pkgcfg_lib_JUCE_CURL_LINUX_DEPS_curl
 pkgcfg_lib_JUCE_CURL_LINUX_DEPS_curl-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: pkgcfg_lib_juce_audio_devices_LINUX_DEPS_asound

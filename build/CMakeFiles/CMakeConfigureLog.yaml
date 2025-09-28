@@ -665,3 +665,75 @@ events:
         
       exitCode: 0
 ...
+
+---
+events:
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "JUCE/extras/Build/CMake/JUCECheckAtomic.cmake:73 (try_compile)"
+      - "JUCE/extras/Build/CMake/JUCECheckAtomic.cmake:128 (_juce_create_atomic_target)"
+      - "JUCE/extras/Build/CMake/JUCEModuleSupport.cmake:57 (include)"
+      - "JUCE/CMakeLists.txt:50 (include)"
+    directories:
+      source: "/home/runner/work/neural-morphing/neural-morphing/build/JUCE/check_atomic_dir_NvSXNRQQaMCL9nLh/CMakeFiles/CMakeTmp"
+      binary: "/home/runner/work/neural-morphing/neural-morphing/build/JUCE/check_atomic_dir_NvSXNRQQaMCL9nLh/CMakeFiles/CMakeTmp"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_POSITION_INDEPENDENT_CODE: "ON"
+    buildResult:
+      variable: "compile_result"
+      cached: true
+      stdout: |
+        Change Dir: '/home/runner/work/neural-morphing/neural-morphing/build/JUCE/check_atomic_dir_NvSXNRQQaMCL9nLh/CMakeFiles/CMakeTmp'
+        
+        Run Build Command(s): /usr/local/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_47508/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_47508.dir/build.make CMakeFiles/cmTC_47508.dir/build
+        gmake[1]: Entering directory '/home/runner/work/neural-morphing/neural-morphing/build/JUCE/check_atomic_dir_NvSXNRQQaMCL9nLh/CMakeFiles/CMakeTmp'
+        Building CXX object CMakeFiles/cmTC_47508.dir/check_atomic_hicMjm33fh5K0Oko.cpp.o
+        /usr/bin/c++   -std=c++17 -fPIE -o CMakeFiles/cmTC_47508.dir/check_atomic_hicMjm33fh5K0Oko.cpp.o -c /home/runner/work/neural-morphing/neural-morphing/build/JUCE/check_atomic_hicMjm33fh5K0Oko.cpp
+        Linking CXX executable cmTC_47508
+        /usr/local/bin/cmake -E cmake_link_script CMakeFiles/cmTC_47508.dir/link.txt --verbose=1
+        /usr/bin/c++ CMakeFiles/cmTC_47508.dir/check_atomic_hicMjm33fh5K0Oko.cpp.o -o cmTC_47508
+        gmake[1]: Leaving directory '/home/runner/work/neural-morphing/neural-morphing/build/JUCE/check_atomic_dir_NvSXNRQQaMCL9nLh/CMakeFiles/CMakeTmp'
+        
+      exitCode: 0
+...
+
+---
+events:
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "JUCE/extras/Build/CMake/JUCECheckAtomic.cmake:73 (try_compile)"
+      - "JUCE/extras/Build/CMake/JUCECheckAtomic.cmake:128 (_juce_create_atomic_target)"
+      - "JUCE/extras/Build/CMake/JUCEModuleSupport.cmake:57 (include)"
+      - "JUCE/CMakeLists.txt:50 (include)"
+    directories:
+      source: "/home/runner/work/neural-morphing/neural-morphing/build/JUCE/check_atomic_dir_Jqsm5ALENeTBjIYx/CMakeFiles/CMakeTmp"
+      binary: "/home/runner/work/neural-morphing/neural-morphing/build/JUCE/check_atomic_dir_Jqsm5ALENeTBjIYx/CMakeFiles/CMakeTmp"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_POSITION_INDEPENDENT_CODE: "ON"
+    buildResult:
+      variable: "compile_result"
+      cached: true
+      stdout: |
+        Change Dir: '/home/runner/work/neural-morphing/neural-morphing/build/JUCE/check_atomic_dir_Jqsm5ALENeTBjIYx/CMakeFiles/CMakeTmp'
+        
+        Run Build Command(s): /usr/local/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_97a1a/fast
+        /usr/bin/gmake  -f CMakeFiles/cmTC_97a1a.dir/build.make CMakeFiles/cmTC_97a1a.dir/build
+        gmake[1]: Entering directory '/home/runner/work/neural-morphing/neural-morphing/build/JUCE/check_atomic_dir_Jqsm5ALENeTBjIYx/CMakeFiles/CMakeTmp'
+        Building CXX object CMakeFiles/cmTC_97a1a.dir/check_atomic_rxF5GuZ4hMzymTrZ.cpp.o
+        /usr/bin/c++   -std=c++17 -fPIE -o CMakeFiles/cmTC_97a1a.dir/check_atomic_rxF5GuZ4hMzymTrZ.cpp.o -c /home/runner/work/neural-morphing/neural-morphing/build/JUCE/check_atomic_rxF5GuZ4hMzymTrZ.cpp
+        Linking CXX executable cmTC_97a1a
+        /usr/local/bin/cmake -E cmake_link_script CMakeFiles/cmTC_97a1a.dir/link.txt --verbose=1
+        /usr/bin/c++ CMakeFiles/cmTC_97a1a.dir/check_atomic_rxF5GuZ4hMzymTrZ.cpp.o -o cmTC_97a1a
+        gmake[1]: Leaving directory '/home/runner/work/neural-morphing/neural-morphing/build/JUCE/check_atomic_dir_Jqsm5ALENeTBjIYx/CMakeFiles/CMakeTmp'
+        
+      exitCode: 0
+...

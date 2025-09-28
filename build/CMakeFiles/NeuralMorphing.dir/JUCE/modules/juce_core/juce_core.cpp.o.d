@@ -485,7 +485,23 @@ CMakeFiles/NeuralMorphing.dir/JUCE/modules/juce_core/juce_core.cpp.o: \
  /usr/include/x86_64-linux-gnu/sys/resource.h \
  /usr/include/x86_64-linux-gnu/bits/resource.h \
  /usr/include/x86_64-linux-gnu/bits/types/struct_rusage.h \
- /usr/include/netinet/tcp.h /usr/include/execinfo.h \
+ /usr/include/x86_64-linux-gnu/curl/curl.h \
+ /usr/include/x86_64-linux-gnu/curl/curlver.h \
+ /usr/include/x86_64-linux-gnu/curl/system.h \
+ /usr/lib/gcc/x86_64-linux-gnu/13/include/limits.h \
+ /usr/lib/gcc/x86_64-linux-gnu/13/include/syslimits.h \
+ /usr/include/limits.h /usr/include/x86_64-linux-gnu/bits/posix2_lim.h \
+ /usr/include/x86_64-linux-gnu/bits/xopen_lim.h \
+ /usr/include/x86_64-linux-gnu/bits/uio_lim.h \
+ /usr/include/x86_64-linux-gnu/curl/easy.h \
+ /usr/include/x86_64-linux-gnu/curl/multi.h \
+ /usr/include/x86_64-linux-gnu/curl/curl.h \
+ /usr/include/x86_64-linux-gnu/curl/urlapi.h \
+ /usr/include/x86_64-linux-gnu/curl/options.h \
+ /usr/include/x86_64-linux-gnu/curl/header.h \
+ /usr/include/x86_64-linux-gnu/curl/websockets.h \
+ /usr/include/x86_64-linux-gnu/curl/mprintf.h /usr/include/netinet/tcp.h \
+ /usr/include/execinfo.h \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/containers/juce_AbstractFifo.cpp \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/containers/juce_ArrayBase.cpp \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/containers/juce_NamedValueSet.cpp \
@@ -518,11 +534,6 @@ CMakeFiles/NeuralMorphing.dir/JUCE/modules/juce_core/juce_core.cpp.o: \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/zip/juce_zlib.h \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/zip/zlib/zlib.h \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/zip/zlib/zconf.h \
- /usr/lib/gcc/x86_64-linux-gnu/13/include/limits.h \
- /usr/lib/gcc/x86_64-linux-gnu/13/include/syslimits.h \
- /usr/include/limits.h /usr/include/x86_64-linux-gnu/bits/posix2_lim.h \
- /usr/include/x86_64-linux-gnu/bits/xopen_lim.h \
- /usr/include/x86_64-linux-gnu/bits/uio_lim.h \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/network/juce_NamedPipe.cpp \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/network/juce_Socket.cpp \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/network/juce_IPAddress.cpp \
@@ -588,6 +599,7 @@ CMakeFiles/NeuralMorphing.dir/JUCE/modules/juce_core/juce_core.cpp.o: \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/native/juce_CommonFile_linux.cpp \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/native/juce_Files_linux.cpp \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/native/juce_Network_linux.cpp \
+ /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/native/juce_Network_curl.cpp \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/native/juce_SystemStats_linux.cpp \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/native/juce_Threads_linux.cpp \
  /home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core/native/juce_PlatformTimer_generic.cpp \
