@@ -52,6 +52,11 @@ public:
 
     PaletteWorker* getPaletteWorker() const { return paletteWorker_.get(); }
     MatchWorker* getMatchWorker() const { return matchWorker_.get(); }
+    
+    // Backend management
+    void switchBackend(int backendType);
+    juce::String getBackendStatus() const;
+    bool isBackendReady() const;
 
 private:
     void refreshBackendSampleRate(double sampleRate);

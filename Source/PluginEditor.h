@@ -2,12 +2,14 @@
 
 #include <vector>
 
+#include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_extra/juce_gui_extra.h>
 
 class NeuralMorphingAudioProcessor;
 
 class NeuralMorphingAudioProcessorEditor : public juce::AudioProcessorEditor,
                                            private juce::Button::Listener,
+                                           private juce::ComboBox::Listener,
                                            private juce::Timer
 {
 public:
@@ -19,6 +21,7 @@ public:
 
 private:
     void buttonClicked(juce::Button*) override;
+    void comboBoxChanged(juce::ComboBox*) override;
     void timerCallback() override;
     void setupSlider(juce::Slider& slider, const juce::String& name);
 
@@ -48,6 +51,12 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> envelopeAttachment_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dryWetAttachment_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputAttachment_;
+
+    // Backend selection UI
+    juce::ComboBox backendSelector_;
+    juce::Label backendLabel_{ "Backend", "Backend:" };
+    juce::Label statusDisplayLabel_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> backendAttachment_;
 
     juce::File lastDirectory_;
     std::vector<juce::File> lastFiles_;

@@ -1,7 +1,11 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "JuceHeader.h"
 #if NM_HAS_ONNX
 #include "ModelBackendOnnx.h"
+#endif
+#if NM_WITH_PYBRIDGE
+#include "ModelBackendHttp.h"
 #endif
 
 namespace
@@ -40,7 +44,7 @@ NeuralMorphingAudioProcessor::~NeuralMorphingAudioProcessor()
 
 const juce::String NeuralMorphingAudioProcessor::getName() const
 {
-    return JUCE_APPLICATION_NAME_STRING;
+    return ProjectInfo::projectName;
 }
 
 void NeuralMorphingAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
@@ -147,7 +151,8 @@ juce::AudioProcessorEditor* NeuralMorphingAudioProcessor::createEditor()
 void NeuralMorphingAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     auto state = parameters.copyState();
-    std::unique_ptr<juce::XmlElement> xml(state.createXml("NeuralMorphingState"));
+    std::unique_ptr<juce::XmlElement> xml(state.createXml());
+    xml->setAttribute("pluginName", "NeuralMorphingState");
     copyXmlToBinary(*xml, destData);
 }
 
@@ -182,6 +187,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralMorphingAudioProcessor
     params.push_back(std::make_unique<juce::AudioParameterFloat>("dryWet", "Dry/Wet", R(0.0f, 1.0f, 0.01f), 1.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("outputGain", "Output Gain (dB)", R(-24.0f, 24.0f, 0.1f), 0.0f));
 
+    // Backend selection (0=Native/ONNX, 1=Python Bridge)
+    juce::StringArray backendChoices;
+    backendChoices.add("Native");
+#if NM_WITH_PYBRIDGE
+    backendChoices.add("Python Bridge");
+#endif
+    params.push_back(std::make_unique<juce::AudioParameterChoice>("backend", "Backend", backendChoices, 0));
+
     return { params.begin(), params.end() };
 }
 
@@ -197,19 +210,40 @@ void NeuralMorphingAudioProcessor::mixWetBuffer(juce::AudioBuffer<float>& buffer
 
 void NeuralMorphingAudioProcessor::initialiseBackend()
 {
-#if NM_HAS_ONNX
-    if (backend_ == nullptr)
-    {
-        const juce::String modelRoot = juce::SystemStats::getEnvironmentVariable("NEURAL_MORPHING_MODEL_DIR", {});
-        if (modelRoot.isNotEmpty())
-        {
-            auto onnxBackend = createOnnxModelBackend();
-            if (onnxBackend != nullptr && onnxBackend->load(modelRoot.toStdString()))
-                backend_ = std::move(onnxBackend);
-        }
-    }
-#endif
+    // Get backend selection from parameters
+    int backendChoice = 0;
+    if (auto* param = dynamic_cast<juce::AudioParameterChoice*>(parameters.getParameter("backend")))
+        backendChoice = param->getIndex();
 
+    // Try to create the selected backend
+    if (backendChoice == 1) // Python Bridge
+    {
+#if NM_WITH_PYBRIDGE
+        juce::String serverUrl = juce::SystemStats::getEnvironmentVariable("NEURAL_MORPHING_SERVER_URL", "http://localhost:8000");
+        auto httpBackend = createHttpModelBackend(serverUrl);
+        if (httpBackend != nullptr && httpBackend->load(""))
+        {
+            backend_ = std::move(httpBackend);
+        }
+#endif
+    }
+    else // Native backend (ONNX or stub)
+    {
+#if NM_HAS_ONNX
+        if (backend_ == nullptr)
+        {
+            const juce::String modelRoot = juce::SystemStats::getEnvironmentVariable("NEURAL_MORPHING_MODEL_DIR", {});
+            if (modelRoot.isNotEmpty())
+            {
+                auto onnxBackend = createOnnxModelBackend();
+                if (onnxBackend != nullptr && onnxBackend->load(modelRoot.toStdString()))
+                    backend_ = std::move(onnxBackend);
+            }
+        }
+#endif
+    }
+
+    // Fallback to stub backend if nothing else worked
     if (backend_ == nullptr)
         backend_ = createStubModelBackend();
 
@@ -218,4 +252,55 @@ void NeuralMorphingAudioProcessor::initialiseBackend()
 
     const int vectorDim = (backend_ != nullptr) ? juce::jmax(1, backend_->embeddingDimension()) : 2;
     paletteIndex_ = std::make_unique<PaletteIndex>(vectorDim);
+}
+
+void NeuralMorphingAudioProcessor::switchBackend(int backendType)
+{
+    // Set the backend parameter
+    if (auto* param = dynamic_cast<juce::AudioParameterChoice*>(parameters.getParameter("backend")))
+        *param = backendType;
+
+    // Clear current backend
+    backend_.reset();
+    
+    // Reinitialize with new backend
+    initialiseBackend();
+    
+    // Update palette index with new embedding dimension
+    const int vectorDim = (backend_ != nullptr) ? juce::jmax(1, backend_->embeddingDimension()) : 2;
+    paletteIndex_ = std::make_unique<PaletteIndex>(vectorDim);
+}
+
+juce::String NeuralMorphingAudioProcessor::getBackendStatus() const
+{
+    if (backend_ == nullptr)
+        return "No backend loaded";
+        
+    if (!backend_->ready())
+        return "Backend not ready";
+
+#if NM_WITH_PYBRIDGE
+    if (auto* httpBackend = dynamic_cast<ModelBackendHttp*>(backend_.get()))
+    {
+        juce::String error = httpBackend->getLastError();
+        if (error.isNotEmpty())
+            return "HTTP Backend Error: " + error;
+        return "HTTP Backend connected to " + httpBackend->getServerUrl();
+    }
+#endif
+
+    return "Backend ready (" + juce::String(backend_->sampleRate()) + " Hz, " 
+           + juce::String(backend_->codebookCount()) + " codebooks)";
+}
+
+bool NeuralMorphingAudioProcessor::isBackendReady() const
+{
+    return backend_ != nullptr && backend_->ready();
+}
+
+//==============================================================================
+// This creates new instances of the plugin..
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
+{
+    return new NeuralMorphingAudioProcessor();
 }
