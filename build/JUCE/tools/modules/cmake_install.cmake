@@ -1,4 +1,4 @@
-# Install script for directory: /home/runner/work/neural-morphing/neural-morphing/JUCE/modules
+# Install script for directory: /home/manos/codes/neural-morphing/JUCE/modules
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -37,106 +37,100 @@ if(NOT DEFINED CMAKE_CROSSCOMPILING)
   set(CMAKE_CROSSCOMPILING "FALSE")
 endif()
 
-# Set path to fallback-tool for dependency-resolution.
+# Set default install directory permissions.
 if(NOT DEFINED CMAKE_OBJDUMP)
   set(CMAKE_OBJDUMP "/usr/bin/objdump")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_analytics")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_analytics")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_animation")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_animation")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_audio_basics")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_audio_basics")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_audio_devices")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_audio_devices")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_audio_formats")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_audio_formats")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_audio_plugin_client")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_audio_plugin_client")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_audio_processors")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_audio_processors")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_audio_utils")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_audio_utils")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_box2d")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_box2d")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_core")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_core")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_cryptography")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_cryptography")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_data_structures")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_data_structures")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_dsp")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_dsp")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_events")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_events")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_graphics")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_graphics")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_gui_basics")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_gui_basics")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_gui_extra")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_gui_extra")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_javascript")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_javascript")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_midi_ci")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_midi_ci")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_opengl")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_opengl")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_osc")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_osc")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_product_unlocking")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_product_unlocking")
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/runner/work/neural-morphing/neural-morphing/JUCE/modules/juce_video")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/include/JUCE-8.0.10/modules" TYPE DIRECTORY FILES "/home/manos/codes/neural-morphing/JUCE/modules/juce_video")
 endif()
 
-string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
-       "${CMAKE_INSTALL_MANIFEST_FILES}")
-if(CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "/home/runner/work/neural-morphing/neural-morphing/build/JUCE/tools/modules/install_local_manifest.txt"
-     "${CMAKE_INSTALL_MANIFEST_CONTENT}")
-endif()

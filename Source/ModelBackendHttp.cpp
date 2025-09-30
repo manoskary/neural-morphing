@@ -108,9 +108,11 @@ TokenBlock ModelBackendHttp::encodePCM(const juce::AudioBuffer<float>& mono)
     {
         auto BVar = obj->getProperty("B");
         auto TVar = obj->getProperty("T");
+        auto codebooksVar = obj->getProperty("codebooks");
         
         int B = BVar.isVoid() ? 1 : static_cast<int>(BVar);
         int T = TVar.isVoid() ? 0 : static_cast<int>(TVar);
+        int codebooks = codebooksVar.isVoid() ? codebookCount_ : static_cast<int>(codebooksVar);
         auto* tokensArray = obj->getProperty("tokens").getArray();
 
         if (tokensArray == nullptr || T == 0)
@@ -122,9 +124,12 @@ TokenBlock ModelBackendHttp::encodePCM(const juce::AudioBuffer<float>& mono)
 
         TokenBlock block;
         block.batchSize = B;
-        block.codebooks = codebookCount_;
+        block.codebooks = codebooks;
         block.frames = T;
-        block.tokens.reserve(static_cast<size_t>(codebookCount_ * T));
+        block.tokens.reserve(static_cast<size_t>(block.codebooks * T));
+
+        if (codebookCount_ == 0 && codebooks > 0)
+            codebookCount_ = codebooks;
 
         for (int i = 0; i < tokensArray->size(); ++i)
             block.tokens.push_back(static_cast<int32_t>(tokensArray->getUnchecked(i)));
