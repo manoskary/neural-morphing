@@ -5,6 +5,27 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_extra/juce_gui_extra.h>
 
+class NeuralMorphingLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    NeuralMorphingLookAndFeel();
+
+    void drawRotarySlider(juce::Graphics&, int x, int y, int width, int height,
+                          float sliderPosProportional, float rotaryStartAngle,
+                          float rotaryEndAngle, juce::Slider&) override;
+    void drawButtonBackground(juce::Graphics&, juce::Button&, const juce::Colour& backgroundColour,
+                              bool isMouseOverButton, bool isButtonDown) override;
+    void drawComboBox(juce::Graphics&, int width, int height, bool isButtonDown,
+                      int buttonX, int buttonY, int buttonW, int buttonH, juce::ComboBox&) override;
+    int getComboBoxBorderThickness(juce::ComboBox&) {
+        return 0;
+    }
+    juce::Font getComboBoxFont(juce::ComboBox&) override;
+
+private:
+    juce::Image knobSprite_;
+};
+
 class NeuralMorphingAudioProcessor;
 
 class NeuralMorphingAudioProcessorEditor : public juce::AudioProcessorEditor,
@@ -27,6 +48,8 @@ private:
 
     NeuralMorphingAudioProcessor& processor_;
 
+    NeuralMorphingLookAndFeel lookAndFeel_;
+
     juce::TextButton loadButton_{ "Add Target Files" };
     juce::TextButton clearButton_{ "Clear Palette" };
     juce::TextButton rebuildButton_{ "Rebuild" };
@@ -42,6 +65,8 @@ private:
     juce::Slider envelopeSlider_;
     juce::Slider dryWetSlider_;
     juce::Slider outputSlider_;
+
+    std::vector<std::unique_ptr<juce::Label>> sliderLabels_;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> temperatureAttachment_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> thresholdAttachment_;

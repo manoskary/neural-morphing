@@ -29,3 +29,10 @@ env/
 *.temp
 
 /build/
+
+# any wave files
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.aac

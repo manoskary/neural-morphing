@@ -24,6 +24,11 @@ set(SOURCE_FILES
     Source/Workers.h
 )
 
+juce_add_binary_data(NeuralMorphingBinaryData
+    SOURCES
+        Resources/knob1.png
+)
+
 juce_add_plugin(NeuralMorphing
     COMPANY_NAME "NeuralMorph"
     BUNDLE_ID com.neuralmorph.plugin
@@ -38,6 +43,8 @@ juce_add_plugin(NeuralMorphing
 )
 
 target_sources(NeuralMorphing PRIVATE ${SOURCE_FILES})
+
+target_link_libraries(NeuralMorphing PRIVATE NeuralMorphingBinaryData)
 
 target_compile_definitions(NeuralMorphing
     PUBLIC
