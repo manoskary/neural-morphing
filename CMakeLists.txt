@@ -27,6 +27,8 @@ set(SOURCE_FILES
 juce_add_binary_data(NeuralMorphingBinaryData
     SOURCES
         Resources/knob1.png
+        Resources/name_long_logo.png
+        Resources/vst_background.png
 )
 
 juce_add_plugin(NeuralMorphing
@@ -38,7 +40,7 @@ juce_add_plugin(NeuralMorphing
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     COPY_PLUGIN_AFTER_BUILD TRUE
-    FORMATS VST3
+    FORMATS VST3 Standalone
     PRODUCT_NAME "Neural Morphing"
 )
 

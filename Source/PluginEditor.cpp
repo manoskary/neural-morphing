@@ -43,16 +43,11 @@ void NeuralMorphingLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y
                                                  float rotaryEndAngle, juce::Slider& slider)
 {
     auto bounds = juce::Rectangle<float>(static_cast<float>(x), static_cast<float>(y),
-                                         static_cast<float>(width), static_cast<float>(height)).reduced(4.0f);
+                                         static_cast<float>(width), static_cast<float>(height)).reduced(2.0f);
 
-    const auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.5f;
+    const auto baseSize = juce::jmin(bounds.getWidth(), bounds.getHeight());
+    const auto radius = baseSize * 0.55f;
     const auto centre = bounds.getCentre();
-
-    // Fluorescent halo behind the knob to blend with the rest of the theme.
-    juce::Colour haloColour = neonGreen.withAlpha(slider.isEnabled() ? 0.18f : 0.05f);
-    g.setColour(haloColour);
-    g.fillEllipse(centre.x - radius * 0.95f, centre.y - radius * 0.95f,
-                  radius * 1.9f, radius * 1.9f);
 
     if (knobSprite_.isValid())
     {
@@ -65,15 +60,9 @@ void NeuralMorphingLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y
             const int frameIndex = juce::jlimit(0, frameCount - 1,
                                                 static_cast<int>(std::round(sliderNorm * (frameCount - 1))));
 
-            const float renderSize = radius * 2.0f;
+            const float renderSize = juce::jmin(baseSize * 1.2f, juce::jmin(static_cast<float>(width), static_cast<float>(height)));
             const float drawX = centre.x - renderSize * 0.5f;
             const float drawY = centre.y - renderSize * 0.5f;
-
-            // Soft shadow for depth
-            g.setColour(juce::Colours::black.withAlpha(0.35f));
-            g.fillEllipse(drawX + 2.0f, drawY + renderSize * 0.65f,
-                          renderSize - 4.0f, renderSize * 0.4f);
-
             g.drawImage(knobSprite_,
                         static_cast<int>(drawX),
                         static_cast<int>(drawY),
@@ -163,6 +152,9 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     setLookAndFeel(&lookAndFeel_);
     setSize(640, 440);
 
+    backgroundImage_ = juce::ImageCache::getFromMemory(BinaryData::vst_background_png, BinaryData::vst_background_pngSize);
+    logoImage_ = juce::ImageCache::getFromMemory(BinaryData::name_long_logo_png, BinaryData::name_long_logo_pngSize);
+
     addAndMakeVisible(loadButton_);
     addAndMakeVisible(clearButton_);
     addAndMakeVisible(rebuildButton_);
@@ -233,47 +225,107 @@ NeuralMorphingAudioProcessorEditor::~NeuralMorphingAudioProcessorEditor()
 
 void NeuralMorphingAudioProcessorEditor::paint(juce::Graphics& g)
 {
-    juce::ColourGradient gradient(darkSlate, 0.0f, 0.0f,
-                                  deepGrey.darker(0.4f), 0.0f, static_cast<float>(getHeight()), false);
-    gradient.addColour(0.5f, deepGrey);
-    g.setGradientFill(gradient);
-    g.fillAll();
+    if (backgroundImage_.isValid())
+    {
+        g.drawImageWithin(backgroundImage_, 0, 0, getWidth(), getHeight(), juce::RectanglePlacement::stretchToFit);
+    }
+    else
+    {
+        juce::ColourGradient gradient(darkSlate, 0.0f, 0.0f,
+                                      deepGrey.darker(0.4f), 0.0f, static_cast<float>(getHeight()), false);
+        gradient.addColour(0.5f, deepGrey);
+        g.setGradientFill(gradient);
+        g.fillAll();
+    }
 
-    juce::Rectangle<int> headerBounds = { 20, 10, getWidth() - 40, 28 };
-    g.setColour(neonGreen);
-    g.setFont(juce::Font(22.0f, juce::Font::bold));
-    g.drawText("Neural Morphing", headerBounds, juce::Justification::centredLeft);
+    logoBounds_ = calculateLogoBounds();
+    if (logoImage_.isValid())
+    {
+        g.drawImageWithin(logoImage_, logoBounds_.getX(), logoBounds_.getY(),
+                          logoBounds_.getWidth(), logoBounds_.getHeight(), juce::RectanglePlacement::centred);
+    }
+    else
+    {
+        g.setColour(neonGreen);
+        g.setFont(juce::Font(22.0f, juce::Font::bold));
+        g.drawText("Neural Morphing", logoBounds_, juce::Justification::centredLeft, true);
+    }
+
+    if constexpr (NeuralMorphingAudioProcessorEditor::showLayoutDebug_)
+    {
+        g.setColour(juce::Colours::white.withAlpha(0.65f));
+        g.setFont(12.0f);
+        g.drawMultiLineText(layoutDebugInfo_, 12, getHeight() - 72, getWidth() - 24);
+    }
 }
 
 void NeuralMorphingAudioProcessorEditor::resized()
 {
-    auto area = getLocalBounds().reduced(12);
+    logoBounds_ = calculateLogoBounds();
 
-    auto headerArea = area.removeFromTop(32);
-    loadButton_.setBounds(headerArea.removeFromLeft(160).reduced(2));
-    clearButton_.setBounds(headerArea.removeFromLeft(120).reduced(2));
-    rebuildButton_.setBounds(headerArea.removeFromLeft(120).reduced(2));
+    layoutDebugInfo_.clear();
 
-    auto statusArea = area.removeFromTop(24);
-    statusLabel_.setBounds(statusArea.removeFromLeft(getWidth() / 2));
+    const int margin = 16;
+    auto bounds = getLocalBounds();
+    int availableWidth = bounds.getWidth() - 2 * margin;
+    int currentY = std::max(bounds.getY() + margin, logoBounds_.getBottom() + margin);
+
+    const int controlsX = margin;
+    const int controlsWidth = availableWidth;
+
+    // Button row positioned beneath the logo.
+    juce::Rectangle<int> buttonRow(controlsX, currentY, controlsWidth, 36);
+    auto buttonSpan = buttonRow;
+    constexpr int buttonGap = 12;
+    int usableWidth = buttonSpan.getWidth();
+    int perButtonWidth = (usableWidth - 2 * buttonGap) / 3;
+    perButtonWidth = juce::jmax(120, perButtonWidth);
+    perButtonWidth = juce::jmin(perButtonWidth, usableWidth);
+
+    auto placeButton = [&](juce::TextButton& button)
+    {
+        auto bounds = buttonSpan.removeFromLeft(perButtonWidth);
+        button.setBounds(bounds);
+        buttonSpan.removeFromLeft(buttonGap);
+    };
+
+    placeButton(loadButton_);
+    placeButton(clearButton_);
+    placeButton(rebuildButton_);
+    layoutDebugInfo_ << "Buttons width:" << buttonRow.getWidth()
+                     << " per:" << perButtonWidth << '\n';
+    currentY += 36 + 10;
+
+    // Status row
+    juce::Rectangle<int> statusArea(controlsX, currentY, controlsWidth, 24);
+    statusLabel_.setBounds(statusArea.removeFromLeft(statusArea.getWidth() / 2));
     progressLabel_.setBounds(statusArea);
+    currentY += 24 + 4;
 
-    // Backend selector area
-    auto backendArea = area.removeFromTop(32);
-    backendSelector_.setBounds(backendArea.removeFromLeft(200).reduced(2));
-    
-    // Backend status area
-    auto backendStatusArea = area.removeFromTop(24);
+    // Backend selector row
+    juce::Rectangle<int> backendArea(controlsX, currentY, controlsWidth, 32);
+    backendSelector_.setBounds(backendArea.removeFromLeft(220).reduced(2));
+    currentY += 32 + 4;
+
+    // Backend status row
+    juce::Rectangle<int> backendStatusArea(controlsX, currentY, controlsWidth, 24);
     statusDisplayLabel_.setBounds(backendStatusArea.reduced(2));
+    currentY += 24 + 12;
 
-    auto sliderArea = area.reduced(0, 10);
+    // Slider grid area
+    juce::Rectangle<int> sliderArea(margin, currentY, bounds.getWidth() - 2 * margin, bounds.getBottom() - margin - currentY);
     const int numColumns = 4;
     const int numRows = 2;
     const int sliderWidth = sliderArea.getWidth() / numColumns;
     const int sliderHeight = sliderArea.getHeight() / numRows;
 
+    layoutDebugInfo_ << "slider:" << sliderArea.getWidth() << "x" << sliderArea.getHeight()
+                    << " cell:" << sliderWidth << "x" << sliderHeight << '\n';
+
     juce::Slider* sliders[] = { &temperatureSlider_, &thresholdSlider_, &unitSlider_, &strideSlider_,
                                 &similaritySlider_, &envelopeSlider_, &dryWetSlider_, &outputSlider_ };
+
+    int lastKnobSize = 0;
 
     for (int row = 0; row < numRows; ++row)
         for (int col = 0; col < numColumns; ++col)
@@ -287,13 +339,22 @@ void NeuralMorphingAudioProcessorEditor::resized()
                                       sliderWidth,
                                       sliderHeight);
 
-            auto labelBounds = cell.removeFromTop(24).reduced(8, 2);
-            auto sliderBounds = cell.reduced(12, 6);
+            constexpr int labelHeight = 26;
+            auto labelBounds = cell.removeFromTop(labelHeight).reduced(8, 0);
+            auto knobRegion = cell.reduced(12, 6);
 
-            sliders[index]->setBounds(sliderBounds);
+            sliders[index]->setBounds(knobRegion);
             if (index < static_cast<int>(sliderLabels_.size()))
+            {
                 sliderLabels_[index]->setBounds(labelBounds);
+                sliderLabels_[index]->setVisible(true);
+                sliderLabels_[index]->toFront(false);
+            }
+
+            lastKnobSize = juce::jmax(lastKnobSize, juce::jmin(knobRegion.getWidth(), knobRegion.getHeight()));
         }
+
+    layoutDebugInfo_ << "Knob region:" << lastKnobSize << "px";
 }
 
 void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
@@ -386,8 +447,42 @@ void NeuralMorphingAudioProcessorEditor::setupSlider(juce::Slider& slider, const
     auto label = std::make_unique<juce::Label>();
     label->setText(name, juce::dontSendNotification);
     label->setJustificationType(juce::Justification::centred);
-    label->setColour(juce::Label::textColourId, textGrey);
+    label->setColour(juce::Label::textColourId, juce::Colours::white);
+    label->setColour(juce::Label::backgroundColourId, neonGreen.withAlpha(0.18f));
+    label->setColour(juce::Label::outlineColourId, neonGreen.withAlpha(0.35f));
+    label->setOpaque(true);
     label->setFont(juce::Font(13.0f, juce::Font::bold));
+    label->setInterceptsMouseClicks(false, false);
     addAndMakeVisible(*label);
     sliderLabels_.push_back(std::move(label));
+}
+
+juce::Rectangle<int> NeuralMorphingAudioProcessorEditor::calculateLogoBounds() const
+{
+    const int padding = 16;
+    const int availableWidth = getWidth() - padding * 2;
+    const int availableHeight = getHeight() - padding * 2;
+    const int baseHeight = 80;
+    const int desiredHeight = juce::jmin(baseHeight * 2, availableHeight);
+
+    if (logoImage_.isValid())
+    {
+        auto imageAspect = static_cast<float>(logoImage_.getWidth()) / static_cast<float>(logoImage_.getHeight());
+        int targetHeight = juce::jmin(desiredHeight, static_cast<int>(availableWidth / imageAspect));
+        if (targetHeight <= 0)
+            targetHeight = desiredHeight;
+        int targetWidth = static_cast<int>(imageAspect * targetHeight);
+        targetWidth = juce::jlimit(0, availableWidth, targetWidth);
+        targetHeight = juce::jlimit(0, availableHeight, targetHeight);
+
+        int x = (getWidth() - targetWidth) / 2;
+        int y = padding;
+
+        return { x, y, targetWidth, targetHeight > 0 ? targetHeight : desiredHeight };
+    }
+
+    int fallbackWidth = juce::jmin(availableWidth, baseHeight * 4);
+    int fallbackHeight = baseHeight;
+    int x = (getWidth() - fallbackWidth) / 2;
+    return { x, padding, fallbackWidth, fallbackHeight };
 }

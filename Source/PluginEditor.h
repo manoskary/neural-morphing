@@ -45,10 +45,13 @@ private:
     void comboBoxChanged(juce::ComboBox*) override;
     void timerCallback() override;
     void setupSlider(juce::Slider& slider, const juce::String& name);
+    juce::Rectangle<int> calculateLogoBounds() const;
 
     NeuralMorphingAudioProcessor& processor_;
 
     NeuralMorphingLookAndFeel lookAndFeel_;
+
+    static constexpr bool showLayoutDebug_ = true;
 
     juce::TextButton loadButton_{ "Add Target Files" };
     juce::TextButton clearButton_{ "Clear Palette" };
@@ -67,6 +70,7 @@ private:
     juce::Slider outputSlider_;
 
     std::vector<std::unique_ptr<juce::Label>> sliderLabels_;
+    juce::String layoutDebugInfo_;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> temperatureAttachment_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> thresholdAttachment_;
@@ -85,6 +89,10 @@ private:
 
     juce::File lastDirectory_;
     std::vector<juce::File> lastFiles_;
+
+    juce::Image backgroundImage_;
+    juce::Image logoImage_;
+    mutable juce::Rectangle<int> logoBounds_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NeuralMorphingAudioProcessorEditor)
 };
