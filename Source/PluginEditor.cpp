@@ -46,7 +46,7 @@ void NeuralMorphingLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y
                                          static_cast<float>(width), static_cast<float>(height)).reduced(2.0f);
 
     const auto baseSize = juce::jmin(bounds.getWidth(), bounds.getHeight());
-    const auto radius = baseSize * 0.55f;
+    const auto radius = baseSize * 0.45f;
     const auto centre = bounds.getCentre();
 
     if (knobSprite_.isValid())
@@ -60,7 +60,7 @@ void NeuralMorphingLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y
             const int frameIndex = juce::jlimit(0, frameCount - 1,
                                                 static_cast<int>(std::round(sliderNorm * (frameCount - 1))));
 
-            const float renderSize = juce::jmin(baseSize * 1.2f, juce::jmin(static_cast<float>(width), static_cast<float>(height)));
+            const float renderSize = juce::jmin(baseSize * 2.4f, juce::jmin(static_cast<float>(width), static_cast<float>(height)));
             const float drawX = centre.x - renderSize * 0.5f;
             const float drawY = centre.y - renderSize * 0.5f;
             g.drawImage(knobSprite_,
@@ -150,7 +150,7 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     : juce::AudioProcessorEditor(&p), processor_(p)
 {
     setLookAndFeel(&lookAndFeel_);
-    setSize(640, 440);
+    setSize(800, 600);
 
     backgroundImage_ = juce::ImageCache::getFromMemory(BinaryData::vst_background_png, BinaryData::vst_background_pngSize);
     logoImage_ = juce::ImageCache::getFromMemory(BinaryData::name_long_logo_png, BinaryData::name_long_logo_pngSize);
@@ -339,9 +339,9 @@ void NeuralMorphingAudioProcessorEditor::resized()
                                       sliderWidth,
                                       sliderHeight);
 
-            constexpr int labelHeight = 26;
-            auto labelBounds = cell.removeFromTop(labelHeight).reduced(8, 0);
-            auto knobRegion = cell.reduced(12, 6);
+            constexpr int labelHeight = 28;
+            auto labelBounds = cell.removeFromTop(labelHeight).reduced(4, 2);
+            auto knobRegion = cell.reduced(4, 2);
 
             sliders[index]->setBounds(knobRegion);
             if (index < static_cast<int>(sliderLabels_.size()))
@@ -451,7 +451,7 @@ void NeuralMorphingAudioProcessorEditor::setupSlider(juce::Slider& slider, const
     label->setColour(juce::Label::backgroundColourId, neonGreen.withAlpha(0.18f));
     label->setColour(juce::Label::outlineColourId, neonGreen.withAlpha(0.35f));
     label->setOpaque(true);
-    label->setFont(juce::Font(13.0f, juce::Font::bold));
+    label->setFont(juce::Font(14.0f, juce::Font::bold));
     label->setInterceptsMouseClicks(false, false);
     addAndMakeVisible(*label);
     sliderLabels_.push_back(std::move(label));
