@@ -462,7 +462,7 @@ juce::Rectangle<int> NeuralMorphingAudioProcessorEditor::calculateLogoBounds() c
     const int padding = 16;
     const int availableWidth = getWidth() - padding * 2;
     const int availableHeight = getHeight() - padding * 2;
-    const int baseHeight = 80;
+    const int baseHeight = 60;
     const int desiredHeight = juce::jmin(baseHeight * 2, availableHeight);
 
     if (logoImage_.isValid())
