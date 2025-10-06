@@ -38,6 +38,7 @@ public:
     ~NeuralMorphingAudioProcessorEditor() override;
 
     void paint(juce::Graphics&) override;
+    void paintOverChildren(juce::Graphics&) override;
     void resized() override;
 
 private:
@@ -51,7 +52,7 @@ private:
 
     NeuralMorphingLookAndFeel lookAndFeel_;
 
-    static constexpr bool showLayoutDebug_ = true;
+    static constexpr bool showLayoutDebug_ = false;
 
     juce::TextButton loadButton_{ "Add Target Files" };
     juce::TextButton clearButton_{ "Clear Palette" };
