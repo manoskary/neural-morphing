@@ -46,7 +46,7 @@ void NeuralMorphingLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y
                                          static_cast<float>(width), static_cast<float>(height)).reduced(2.0f);
 
     const auto baseSize = juce::jmin(bounds.getWidth(), bounds.getHeight());
-    const auto radius = baseSize * 0.55f;
+    const auto radius = baseSize * 0.40f;
     const auto centre = bounds.getCentre();
 
     if (knobSprite_.isValid())
@@ -60,7 +60,7 @@ void NeuralMorphingLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y
             const int frameIndex = juce::jlimit(0, frameCount - 1,
                                                 static_cast<int>(std::round(sliderNorm * (frameCount - 1))));
 
-            const float renderSize = juce::jmin(baseSize * 1.2f, juce::jmin(static_cast<float>(width), static_cast<float>(height)));
+            const float renderSize = juce::jmin(baseSize * 1.8f, juce::jmin(static_cast<float>(width), static_cast<float>(height)));
             const float drawX = centre.x - renderSize * 0.5f;
             const float drawY = centre.y - renderSize * 0.5f;
             g.drawImage(knobSprite_,
@@ -150,7 +150,6 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     : juce::AudioProcessorEditor(&p), processor_(p)
 {
     setLookAndFeel(&lookAndFeel_);
-    setSize(640, 440);
 
     backgroundImage_ = juce::ImageCache::getFromMemory(BinaryData::vst_background_png, BinaryData::vst_background_pngSize);
     logoImage_ = juce::ImageCache::getFromMemory(BinaryData::name_long_logo_png, BinaryData::name_long_logo_pngSize);
@@ -169,6 +168,16 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     setupSlider(envelopeSlider_, "Envelope");
     setupSlider(dryWetSlider_, "Dry/Wet");
     setupSlider(outputSlider_, "Output");
+
+    // Ensure labels are on top by bringing them to front after all sliders are set up
+    for (auto& label : sliderLabels_)
+    {
+        if (label)
+            label->toFront(false);
+    }
+    
+    // Set size AFTER creating all components so resized() can position them correctly
+    setSize(800, 600);
 
     temperatureAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor_.parameters, "temperature", temperatureSlider_);
     thresholdAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor_.parameters, "threshold", thresholdSlider_);
@@ -225,9 +234,13 @@ NeuralMorphingAudioProcessorEditor::~NeuralMorphingAudioProcessorEditor()
 
 void NeuralMorphingAudioProcessorEditor::paint(juce::Graphics& g)
 {
+    // Draw background first (behind all child components)
     if (backgroundImage_.isValid())
     {
+        // Only draw background, don't use stretchToFit to avoid covering UI elements
+        g.setOpacity(0.95f);
         g.drawImageWithin(backgroundImage_, 0, 0, getWidth(), getHeight(), juce::RectanglePlacement::stretchToFit);
+        g.setOpacity(1.0f);
     }
     else
     {
@@ -256,6 +269,68 @@ void NeuralMorphingAudioProcessorEditor::paint(juce::Graphics& g)
         g.setColour(juce::Colours::white.withAlpha(0.65f));
         g.setFont(12.0f);
         g.drawMultiLineText(layoutDebugInfo_, 12, getHeight() - 72, getWidth() - 24);
+    }
+}
+
+void NeuralMorphingAudioProcessorEditor::paintOverChildren(juce::Graphics& g)
+{
+    // Paint labels directly on top of all children (including knobs)
+    // This is called AFTER all child components are painted
+    
+    int labelCount = 0;
+    int visibleCount = 0;
+    int emptyBoundsCount = 0;
+    
+    for (size_t i = 0; i < sliderLabels_.size(); ++i)
+    {
+        if (sliderLabels_[i])
+        {
+            labelCount++;
+            
+            if (sliderLabels_[i]->isVisible())
+            {
+                visibleCount++;
+                auto bounds = sliderLabels_[i]->getBounds();
+                
+                // Check if bounds are empty
+                if (bounds.isEmpty())
+                {
+                    emptyBoundsCount++;
+                    continue;
+                }
+                
+                // Draw solid dark background for contrast
+                g.setColour(darkSlate.withAlpha(0.9f));
+                g.fillRoundedRectangle(bounds.toFloat(), 6.0f);
+                
+                // Draw bright border
+                g.setColour(neonGreen);
+                g.drawRoundedRectangle(bounds.toFloat(), 6.0f, 2.0f);
+                
+                // Draw WHITE text - this MUST be visible
+                g.setColour(juce::Colours::white);
+                g.setFont(juce::Font(16.0f, juce::Font::bold));
+                g.drawText(sliderLabels_[i]->getText(), bounds, juce::Justification::centred);
+            }
+        }
+    }
+    
+    // Debug: show detailed label info
+    if constexpr (NeuralMorphingAudioProcessorEditor::showLayoutDebug_)
+    {
+        g.setColour(juce::Colours::yellow);
+        g.setFont(14.0f);
+        juce::String info = "Labels: " + juce::String(labelCount) + 
+                           " Visible: " + juce::String(visibleCount) + 
+                           " EmptyBounds: " + juce::String(emptyBoundsCount) +
+                           " Painted: " + juce::String(visibleCount - emptyBoundsCount);
+        g.drawText(info, 10, 10, 400, 30, juce::Justification::left);
+        
+        // Also draw a test rectangle to confirm paintOverChildren is working
+        g.setColour(juce::Colours::red.withAlpha(0.5f));
+        g.fillRect(10, 45, 100, 20);
+        g.setColour(juce::Colours::white);
+        g.drawText("TEST PAINT", 10, 45, 100, 20, juce::Justification::centred);
     }
 }
 
@@ -327,6 +402,7 @@ void NeuralMorphingAudioProcessorEditor::resized()
 
     int lastKnobSize = 0;
 
+    // First pass: position sliders
     for (int row = 0; row < numRows; ++row)
         for (int col = 0; col < numColumns; ++col)
         {
@@ -339,22 +415,47 @@ void NeuralMorphingAudioProcessorEditor::resized()
                                       sliderWidth,
                                       sliderHeight);
 
-            constexpr int labelHeight = 26;
-            auto labelBounds = cell.removeFromTop(labelHeight).reduced(8, 0);
-            auto knobRegion = cell.reduced(12, 6);
+            constexpr int labelHeight = 32;
+            constexpr int verticalGap = 4;
+            auto labelBounds = cell.removeFromTop(labelHeight);
+            cell.removeFromTop(verticalGap);
+            auto knobRegion = cell.reduced(8, 4);
 
             sliders[index]->setBounds(knobRegion);
-            if (index < static_cast<int>(sliderLabels_.size()))
-            {
-                sliderLabels_[index]->setBounds(labelBounds);
-                sliderLabels_[index]->setVisible(true);
-                sliderLabels_[index]->toFront(false);
-            }
 
             lastKnobSize = juce::jmax(lastKnobSize, juce::jmin(knobRegion.getWidth(), knobRegion.getHeight()));
         }
 
-    layoutDebugInfo_ << "Knob region:" << lastKnobSize << "px";
+    // Second pass: position labels AFTER sliders (so they render on top)
+    int labelsPositioned = 0;
+    for (int row = 0; row < numRows; ++row)
+        for (int col = 0; col < numColumns; ++col)
+        {
+            const int index = row * numColumns + col;
+            if (index >= static_cast<int>(std::size(sliders)) || index >= static_cast<int>(sliderLabels_.size()))
+                continue;
+
+            juce::Rectangle<int> cell(sliderArea.getX() + col * sliderWidth,
+                                      sliderArea.getY() + row * sliderHeight,
+                                      sliderWidth,
+                                      sliderHeight);
+
+            constexpr int labelHeight = 32;
+            auto labelBounds = cell.removeFromTop(labelHeight).reduced(8, 4);
+
+            sliderLabels_[index]->setBounds(labelBounds);
+            sliderLabels_[index]->setVisible(true);
+            sliderLabels_[index]->toFront(true);
+            
+            labelsPositioned++;
+            
+            if constexpr (NeuralMorphingAudioProcessorEditor::showLayoutDebug_)
+            {
+                layoutDebugInfo_ << "Label[" << index << "]: " << labelBounds.toString() << '\n';
+            }
+        }
+
+    layoutDebugInfo_ << "Knob region:" << lastKnobSize << "px Labels positioned: " << labelsPositioned;
 }
 
 void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
@@ -444,15 +545,16 @@ void NeuralMorphingAudioProcessorEditor::setupSlider(juce::Slider& slider, const
     slider.setColour(juce::Slider::trackColourId, accentGrey);
     addAndMakeVisible(slider);
 
-    auto label = std::make_unique<juce::Label>();
-    label->setText(name, juce::dontSendNotification);
+    // Create a label that will be positioned above the slider
+    auto label = std::make_unique<juce::Label>(name + "_label", name);
     label->setJustificationType(juce::Justification::centred);
-    label->setColour(juce::Label::textColourId, juce::Colours::white);
-    label->setColour(juce::Label::backgroundColourId, neonGreen.withAlpha(0.18f));
-    label->setColour(juce::Label::outlineColourId, neonGreen.withAlpha(0.35f));
-    label->setOpaque(true);
-    label->setFont(juce::Font(13.0f, juce::Font::bold));
+    label->setColour(juce::Label::textColourId, neonGreen);
+    label->setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+    label->setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
+    label->setFont(juce::Font(14.0f, juce::Font::bold));
     label->setInterceptsMouseClicks(false, false);
+    
+    // Critical: Add label AFTER slider so it's painted on top
     addAndMakeVisible(*label);
     sliderLabels_.push_back(std::move(label));
 }
@@ -462,7 +564,7 @@ juce::Rectangle<int> NeuralMorphingAudioProcessorEditor::calculateLogoBounds() c
     const int padding = 16;
     const int availableWidth = getWidth() - padding * 2;
     const int availableHeight = getHeight() - padding * 2;
-    const int baseHeight = 80;
+    const int baseHeight = 100;
     const int desiredHeight = juce::jmin(baseHeight * 2, availableHeight);
 
     if (logoImage_.isValid())

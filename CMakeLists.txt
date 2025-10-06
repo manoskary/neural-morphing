@@ -67,6 +67,7 @@ target_link_libraries(NeuralMorphing PRIVATE
     juce::juce_gui_basics
     juce::juce_gui_extra
     juce::juce_data_structures
+    curl
 )
 
 option(NEURAL_MORPHING_ENABLE_ONNX "Build with ONNX Runtime backend" ON)
