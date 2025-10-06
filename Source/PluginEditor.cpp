@@ -277,6 +277,10 @@ void NeuralMorphingAudioProcessorEditor::paintOverChildren(juce::Graphics& g)
     // Paint labels directly on top of all children (including knobs)
     // This is called AFTER all child components are painted
     
+    // Custom colors for label boxes
+    const auto labelBackgroundColor = juce::Colour::fromRGBA(0x1f, 0x3b, 0x58, 0xff); // #1f3b58ff
+    const auto labelOutlineColor = juce::Colour::fromRGBA(0x71, 0xfb, 0xfc, 0xff);    // #71fbfcff
+    
     int labelCount = 0;
     int visibleCount = 0;
     int emptyBoundsCount = 0;
@@ -299,15 +303,15 @@ void NeuralMorphingAudioProcessorEditor::paintOverChildren(juce::Graphics& g)
                     continue;
                 }
                 
-                // Draw solid dark background for contrast
-                g.setColour(darkSlate.withAlpha(0.9f));
+                // Draw background with custom color #1f3b58ff
+                g.setColour(labelBackgroundColor);
                 g.fillRoundedRectangle(bounds.toFloat(), 6.0f);
                 
-                // Draw bright border
-                g.setColour(neonGreen);
+                // Draw outline with custom color #71fbfcff
+                g.setColour(labelOutlineColor);
                 g.drawRoundedRectangle(bounds.toFloat(), 6.0f, 2.0f);
                 
-                // Draw WHITE text - this MUST be visible
+                // Draw WHITE text
                 g.setColour(juce::Colours::white);
                 g.setFont(juce::Font(16.0f, juce::Font::bold));
                 g.drawText(sliderLabels_[i]->getText(), bounds, juce::Justification::centred);
