@@ -1,28 +1,41 @@
 """
 Latent Granular Synthesis with DAC (Descript Audio Codec)
 ========================================================
-creates a "granular codebook" by encoding a source audio corpus 
-into latent vector segments, then matches each latent grain of a 
+creates a "granular codebook" by encoding a source audio corpus
+into latent vector segments, then matches each latent grain of a
 target audio signal to its closest counterpart in the codebook.
 """
 
+import contextlib
+
 import gradio as gr
-import librosa, torch
+import librosa
 import numpy as np
+import soundfile as sf
+import torch
+import torch.nn.functional as F
 from tqdm import tqdm
-from transformers import DacModel, AutoProcessor
-from scipy.spatial.distance import cdist
+from transformers import AutoProcessor, DacModel
 
 class LatentGranularSynthesis:
-    def __init__(self, model_name="descript/dac_44khz"):
+    def __init__(self, model_name="descript/dac_44khz", device=None, chunk_duration_s=8.0, match_batch=2048):
         """Initialize with DAC model from HuggingFace."""
-        self.model = DacModel.from_pretrained(model_name, device_map="auto")
-        self.processor = AutoProcessor.from_pretrained(model_name, device="auto")
-                
+        preferred_device = device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device(preferred_device)
+        self.compute_dtype = torch.float16 if self.device.type == "cuda" else torch.float32
+        self.chunk_duration_s = max(chunk_duration_s, 1.0)
+        self.match_batch = max(int(match_batch), 1)
+
+        self.model = DacModel.from_pretrained(model_name)
+        self.model.to(self.device)
+        self.model.eval()
+        self.processor = AutoProcessor.from_pretrained(model_name)
+
         # Get sampling rate from processor
         self.sample_rate = self.processor.sampling_rate
         print(f"Using DAC model: {model_name}")
         print(f"Sample rate: {self.sample_rate} Hz")
+        print(f"Compute device: {self.device}")
 
         self.unit = 2
         self.stride = 2
@@ -31,163 +44,308 @@ class LatentGranularSynthesis:
         self.files = None
         self.pitch_aug = [-5, -2, 2, 5]
         self.vol_aug = [0.3, 0.7]
-    
+
+        self.codedb_segments = []
+        self.codedb = None
+        self.db = None
+        self.db_flat = None
+        self.db_flat_device = None
+
     def encode(self, audio_array):
-        """Encode audio using DAC."""                
-        # Process with DAC processor
+        """Encode audio using DAC."""
+        if audio_array is None:
+            return None, None
+
+        if isinstance(audio_array, torch.Tensor):
+            audio_array = audio_array.detach().cpu().numpy()
+
+        audio_array = np.asarray(audio_array, dtype=np.float32)
+
+        if audio_array.ndim > 1:
+            audio_array = librosa.to_mono(audio_array)
+
+        if audio_array.size == 0:
+            return None, None
+
         inputs = self.processor(
-            raw_audio=audio_array, 
-            sampling_rate=self.sample_rate, 
-            return_tensors="pt"
+            raw_audio=audio_array,
+            sampling_rate=self.sample_rate,
+            return_tensors="pt",
         )
-        
-        # Move inputs to device
-        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-        
+
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
         with torch.no_grad():
-            # Encode to get discrete codes and quantized representation
-            encoder_outputs = self.model.encode(inputs["input_values"])
-            # DAC returns DacEncoderOutput with audio_codes and quantized_representation
-            audio_codes = encoder_outputs.audio_codes
-            quantized_representation = encoder_outputs.quantized_representation
-            
+            with self._autocast_context():
+                encoder_outputs = self.model.encode(inputs["input_values"])
+
+        audio_codes = encoder_outputs.audio_codes.detach().to("cpu")
+        quantized_representation = encoder_outputs.quantized_representation.detach().to("cpu", dtype=torch.float32)
+
         return audio_codes, quantized_representation
     
     def decode(self, quantized_representation):
         """Decode quantized representation back to audio using DAC."""
+        if quantized_representation is None:
+            return None
+
+        target_dtype = self.compute_dtype if self.device.type == "cuda" else torch.float32
+        quantized_representation = quantized_representation.to(self.device, dtype=target_dtype)
+
         with torch.no_grad():
-            # Decode the quantized representation
-            audio_values = self.model.decode(quantized_representation)
-            
+            with self._autocast_context():
+                audio_values = self.model.decode(quantized_representation)
+
         return audio_values
     
+    def _autocast_context(self):
+        if self.device.type == "cuda":
+            return torch.autocast(device_type="cuda", dtype=self.compute_dtype)
+        return contextlib.nullcontext()
+
+    def _stream_audio(self, path):
+        """Yield normalized mono chunks from disk to keep memory usage low."""
+        try:
+            with sf.SoundFile(path) as source:
+                source_sr = source.samplerate
+                block_frames = max(int(self.chunk_duration_s * source_sr), source_sr)
+                while True:
+                    frames = source.read(block_frames, dtype="float32", always_2d=True)
+                    if frames.size == 0:
+                        break
+
+                    mono = librosa.to_mono(frames.T)
+                    if source_sr != self.sample_rate:
+                        mono = librosa.resample(mono, orig_sr=source_sr, target_sr=self.sample_rate)
+                    mono = librosa.util.normalize(mono)
+                    if mono.size == 0:
+                        continue
+                    yield mono
+        except Exception as exc:
+            print(f"Failed streaming {path}: {exc}")
+
+    def _ingest_audio_segment(self, segment):
+        """Encode a segment and append it to the codebook cache."""
+        if segment is None:
+            return False
+
+        segment = np.asarray(segment, dtype=np.float32)
+        if segment.ndim > 1:
+            segment = librosa.to_mono(segment)
+
+        if segment.size == 0:
+            return False
+
+        _, quantized = self.encode(segment)
+        if quantized is None or quantized.shape[-1] < self.unit:
+            return False
+
+        self.codedb_segments.append(quantized.contiguous())
+        return True
+
+    def _finalize_codebook(self):
+        """Finalize tensor views used for matching."""
+        if not self.codedb_segments:
+            self.codedb = None
+            self.db = None
+            self.db_flat = None
+            self.db_flat_device = None
+            return
+
+        self.codedb = torch.cat(self.codedb_segments, dim=-1)
+
+        segment_views = []
+        for chunk in self.codedb_segments:
+            # chunk shape: (batch, features, frames)
+            unfolded = chunk.unfold(-1, self.unit, self.stride)
+            if unfolded.numel() == 0:
+                continue
+            # -> (batch, features, segments, unit)
+            unfolded = unfolded.squeeze(0).permute(1, 0, 2).contiguous()
+            segment_views.append(unfolded)
+
+        if not segment_views:
+            self.db = torch.empty(0, dtype=torch.float32)
+            self.db_flat = torch.empty(0, dtype=torch.float32)
+            self.db_flat_device = None
+            return
+
+        self.db = torch.cat(segment_views, dim=0).to(torch.float32)
+        self.db_flat = self.db.reshape(self.db.shape[0], -1).contiguous()
+        self._prepare_match_tensors()
+
+    def _prepare_match_tensors(self):
+        self.db_flat_device = None
+        if self.device.type != "cuda" or self.db_flat is None:
+            return
+        try:
+            self.db_flat_device = self.db_flat.to(self.device)
+        except RuntimeError:
+            # Not enough GPU memory; fall back to CPU matching.
+            self.db_flat_device = None
+            torch.cuda.empty_cache()
+            print("Warning: codebook is too large to keep on the GPU. Falling back to CPU matching.")
+
+    def _compute_distances(self, target_code):
+        if self.db_flat is None or self.db_flat.numel() == 0:
+            return torch.empty(0)
+
+        target_vec = target_code.reshape(-1).to(torch.float32)
+        distances = []
+
+        if self.db_flat_device is not None:
+            target_vec = target_vec.to(self.db_flat_device.dtype).to(self.device)
+            for start in range(0, self.db_flat_device.shape[0], self.match_batch):
+                chunk = self.db_flat_device[start:start + self.match_batch]
+                sims = F.cosine_similarity(chunk, target_vec.unsqueeze(0), dim=1)
+                distances.append((1 - sims).cpu())
+        else:
+            target_vec = target_vec.to(self.db_flat.dtype)
+            for start in range(0, self.db_flat.shape[0], self.match_batch):
+                chunk = self.db_flat[start:start + self.match_batch]
+                sims = F.cosine_similarity(chunk, target_vec.unsqueeze(0), dim=1)
+                distances.append(1 - sims)
+
+        if not distances:
+            return torch.empty(0)
+
+        return torch.cat(distances, dim=0)
+
     def set_temperature(self, temperature, threshold):
         self.temperature = temperature * 0.01
         self.threshold = threshold
 
     def set_unit(self, unit, stride):
-        self.unit = unit
-        self.stride = stride
-        if self.files is not None:
-            self.build_dataset(self.files, False)
+        self.unit = max(int(unit), 1)
+        self.stride = max(int(stride), 1)
+        if self.codedb_segments:
+            self._finalize_codebook()
 
     def build_dataset(self, files, aug_checkbox: bool):
         self.files = files
-        self.codedb = torch.tensor([])
+        self.codedb_segments = []
+        self.codedb = None
+        self.db = None
+        self.db_flat = None
+        self.db_flat_device = None
+
         n_files = 0
+
         for path in files:
+            processed_any = False
             try:
-                y, sr = librosa.load(path, sr=44100)
-
-                # verify y is mono
-                if y.ndim > 1:
-                    y = librosa.to_mono(y)                
-
-                # Normalize audio
-                y = librosa.util.normalize(y)
-
                 if aug_checkbox:
-                    # Apply volume augmentation
+                    y, _ = librosa.load(path, sr=self.sample_rate, mono=True)
+                    y = librosa.util.normalize(y.astype(np.float32, copy=False))
+                    processed_any |= self._ingest_audio_segment(y)
+
                     for vol in self.vol_aug:
-                        y_vol = y * vol
-                        y = np.hstack((y, y_vol))
+                        processed_any |= self._ingest_audio_segment(np.clip(y * vol, -1.0, 1.0))
 
-                    # Apply pitch augmentation
                     for pitch in self.pitch_aug:
-                        y_pitch = librosa.effects.pitch_shift(y, sr=sr, n_steps=pitch)
-                        y = np.hstack((y, y_pitch))
+                        y_pitch = librosa.effects.pitch_shift(y, sr=self.sample_rate, n_steps=pitch)
+                        y_pitch = librosa.util.normalize(y_pitch.astype(np.float32, copy=False))
+                        processed_any |= self._ingest_audio_segment(y_pitch)
+                else:
+                    for chunk in self._stream_audio(path):
+                        processed_any |= self._ingest_audio_segment(chunk)
 
-                # print some info
-                print(f"Processing codes for {path}, audio shape: {y.shape}, sample rate: {sr}")                
-                # Encode audio
-                _, audio_codes = self.encode(y)
-                # Use audio codes for granular matching - ensure proper initialization
-                if audio_codes is not None:
-                    if self.codedb.numel() == 0:
-                        self.codedb = audio_codes.cpu()
-                    else:
-                        self.codedb = torch.cat([self.codedb, audio_codes.cpu()], dim=-1)
+                if processed_any:
                     n_files += 1
-            except Exception as e:
-                print(e)
+            except Exception as exc:
+                print(f"Error processing {path}: {exc}")
 
-        self.db = torch.tensor([])
-        for i in range(0, self.codedb.shape[-1], 1):
-            code =  self.codedb[:,:,i:i+self.unit]
-            if code.shape[-1] != self.unit:
-                continue
-            self.db = torch.cat((self.db, code), dim=0)
-        
-        return {"message": f"Done! {n_files} files processed."}
+        if not self.codedb_segments:
+            self.codedb = None
+            self.db = None
+            self.db_flat = None
+            self.db_flat_device = None
+            return {"message": "No audio processed. Please verify the input files."}
+
+        self._finalize_codebook()
+        codebook_size = 0 if self.db is None else self.db.shape[0]
+
+        return {"message": f"Done! {n_files} files processed. Codebook grains: {codebook_size}."}
  
     def morph_audio(self, target_file):
-        # load target audio
-        y, sr = librosa.load(target_file, sr=self.sample_rate, mono=True)
-        print(f"Target audio shape: {y.shape}, sample rate: {sr}" )
-        print("Creating codes for target audio")
-        _, target_codes = self.encode(y)    
-        
-        if target_codes is None:
+        if self.db is None or self.db.numel() == 0:
             return self.sample_rate, np.zeros(1024, dtype=np.int16)
-            
-        reconstructed = torch.zeros_like(target_codes).to(target_codes.device)
 
-        # to make it stereo
+        print("Creating codes for target audio")
+        target_segments = []
+
+        for chunk in self._stream_audio(target_file):
+            _, quantized = self.encode(chunk)
+            if quantized is not None and quantized.shape[-1] >= self.unit:
+                target_segments.append(quantized)
+
+        if not target_segments:
+            return self.sample_rate, np.zeros(1024, dtype=np.int16)
+
+        target_codes = torch.cat(target_segments, dim=-1)
+
+        if target_codes.shape[-1] < self.unit:
+            return self.sample_rate, np.zeros(1024, dtype=np.int16)
+
+        reconstructed = torch.zeros_like(target_codes)
+
+        # produce stereo when needed
         if reconstructed.shape[0] == 1:
-            reconstructed = torch.vstack([reconstructed, reconstructed]) 
+            reconstructed = torch.vstack([reconstructed, reconstructed])
 
-        # find closest code in db
         print("Matching grains...")
         for i in tqdm(range(0, target_codes.shape[-1], self.stride)):
-            target_code = target_codes[:,:,i:i+self.unit]
+            target_code = target_codes[:, :, i : i + self.unit]
             if target_code.shape[-1] != self.unit:
                 continue
 
-            distances = cdist(self.db.reshape(self.db.shape[0], -1).cpu().numpy(), 
-                                target_code.reshape(1, -1).cpu().numpy(), 'cosine').squeeze()
+            distances = self._compute_distances(target_code)
+            if distances.numel() == 0:
+                continue
 
-            # Apply temperature scaling to logits
-            logits = -distances / (self.temperature + 1e-8)
-            probabilities = np.exp(logits) / (np.sum(np.exp(logits)) + 1e-8)
-            probabilities = np.nan_to_num(probabilities)
+            temperature = max(self.temperature, 1e-4)
+            logits = torch.nan_to_num(-distances / temperature, nan=-1e9, posinf=-1e9, neginf=1e9)
+            probabilities = torch.softmax(logits, dim=0)
 
-            for j in range(2): # to fill stereo buffer
-                code_closest = self.db[np.random.choice(self.db.shape[0], p=probabilities/np.sum(probabilities))]
-                if min(distances) > self.threshold:
-                    code_closest = target_code   
-                if i+self.unit < reconstructed.shape[-1]:   
-                    reconstructed[j,:,i:i+self.unit] = code_closest
-                else:
-                    reconstructed[j,:,i:] = code_closest[:,:reconstructed.shape[-1]-i]
+            if not torch.isfinite(probabilities).all() or probabilities.sum() <= 0:
+                probabilities = torch.full_like(distances, 1.0 / distances.numel())
 
-        # decode using DAC
-        # For DAC, we need to reconstruct the quantized representation
-        # This is a simplified approach - in practice, you might need to 
-        # properly map the codes back to quantized representation
+            idx = torch.multinomial(probabilities, num_samples=1).item()
+            min_distance = distances.min().item()
+
+            code_closest = self.db[idx]
+            if min_distance > self.threshold:
+                code_closest = target_code.squeeze(0)
+
+            code_closest = code_closest.to(reconstructed.dtype)
+            end = min(i + self.unit, reconstructed.shape[-1])
+            span = end - i
+            code_slice = code_closest[:, :span]
+
+            for channel in range(reconstructed.shape[0]):
+                reconstructed[channel, :, i:end] = code_slice
+
         print("Decoding reconstructed/morphed audio...")
-        y2 = self.decode(reconstructed)  # Using original quantized as fallback
-        
-        # Handle DAC decoder output - check the actual structure
-        
-        audio_output = y2.audio_values
-            
-        # Ensure we have a valid tensor and extract the tensor data
-        if audio_output is None:
-            return sr, np.zeros(1024, dtype=np.int16)
-        
-        # Handle DacDecoderOutput - extract the actual tensor
-        if hasattr(audio_output, 'squeeze'):
+        decoded = self.decode(reconstructed)
+
+        if decoded is None or getattr(decoded, "audio_values", None) is None:
+            return self.sample_rate, np.zeros(1024, dtype=np.int16)
+
+        audio_output = decoded.audio_values
+
+        if hasattr(audio_output, "squeeze"):
             final_audio = audio_output
-        elif hasattr(audio_output, 'data'):
+        elif hasattr(audio_output, "data"):
             final_audio = audio_output.data
-        elif hasattr(audio_output, 'tensor'):
+        elif hasattr(audio_output, "tensor"):
             final_audio = audio_output.tensor
         else:
-            # Try to convert to tensor if it's not already
             final_audio = torch.as_tensor(audio_output)
-            
-        sr = self.sample_rate
-        return sr, (final_audio.cpu().numpy().squeeze().transpose() * 31000).astype(np.int16)
+
+        final_np = final_audio.detach().cpu().numpy()
+        final_np = np.squeeze(final_np)
+
+        return self.sample_rate, (np.clip(final_np, -1.0, 1.0) * 31000).astype(np.int16)
 
 
 synth = LatentGranularSynthesis()
@@ -205,37 +363,43 @@ def unit(unit, stride):
     return synth.set_unit(unit, stride)
 
 
-with gr.Blocks() as demo:
-    with gr.Row():
-        with gr.Column():
-            # gr.Label("Upload your audio files to train a model")
-            db_file = gr.File(file_count="multiple", label="Source Sounds")
-            aug_checkbox = gr.Checkbox(label="Apply Augmentation")
-            b1 = gr.Button("Process source sounds")
-            text = gr.Textbox(label="Result")
+def _build_demo():
+    with gr.Blocks() as demo:
+        with gr.Row():
+            with gr.Column():
+                db_file = gr.File(file_count="multiple", label="Source Sounds")
+                aug_checkbox = gr.Checkbox(label="Apply Augmentation")
+                b1 = gr.Button("Process source sounds")
+                text = gr.Textbox(label="Result")
 
-        with gr.Column():
-            # gr.Label("Upload a target audio file to morph")
-            target_file = gr.File(label="Target sound")
-            
-            # Parameter controls
-            with gr.Row():
-                temp_slider = gr.Slider(0.1, 2.0, value=1.0, label="Temperature")
-                threshold_slider = gr.Slider(0.1, 2.0, value=1.0, label="Threshold")
-            with gr.Row():
-                unit_slider = gr.Slider(1, 10, value=2, step=1, label="Unit Size")
-                stride_slider = gr.Slider(1, 10, value=2, step=1, label="Stride")
-                
-            b2 = gr.Button("Morph Audio")
-            audioplayer = gr.Audio(label="Output")
+            with gr.Column():
+                target_file = gr.File(label="Target sound")
 
-    # Connect the interface elements
-    temp_slider.change(temperature, inputs=[temp_slider, threshold_slider])
-    threshold_slider.change(temperature, inputs=[temp_slider, threshold_slider])
-    unit_slider.change(unit, inputs=[unit_slider, stride_slider])
-    stride_slider.change(unit, inputs=[unit_slider, stride_slider])
-    
-    b1.click(build_dataset, inputs=[db_file, aug_checkbox], outputs=text)
-    b2.click(morph_audio, inputs=target_file, outputs=audioplayer)
+                with gr.Row():
+                    temp_slider = gr.Slider(0.1, 2.0, value=1.0, label="Temperature")
+                    threshold_slider = gr.Slider(0.1, 2.0, value=1.0, label="Threshold")
+                with gr.Row():
+                    unit_slider = gr.Slider(1, 10, value=2, step=1, label="Unit Size")
+                    stride_slider = gr.Slider(1, 10, value=2, step=1, label="Stride")
 
-demo.launch()
+                b2 = gr.Button("Morph Audio")
+                audioplayer = gr.Audio(label="Output")
+
+        temp_slider.change(temperature, inputs=[temp_slider, threshold_slider])
+        threshold_slider.change(temperature, inputs=[temp_slider, threshold_slider])
+        unit_slider.change(unit, inputs=[unit_slider, stride_slider])
+        stride_slider.change(unit, inputs=[unit_slider, stride_slider])
+
+        b1.click(build_dataset, inputs=[db_file, aug_checkbox], outputs=text)
+        b2.click(morph_audio, inputs=target_file, outputs=audioplayer)
+
+    return demo
+
+
+def main():
+    demo = _build_demo()
+    demo.launch(show_error=True)
+
+
+if __name__ == "__main__":
+    main()

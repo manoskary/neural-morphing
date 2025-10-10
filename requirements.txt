@@ -9,3 +9,4 @@ soundfile>=0.12
 tqdm>=4.66
 gradio>=4.0
 huggingface_hub>=0.19
+accelerate>=1.10
