@@ -62,6 +62,8 @@ private:
     void refreshBackendSampleRate(double sampleRate);
     void mixWetBuffer(juce::AudioBuffer<float>& buffer, juce::AudioBuffer<float>& dryBuffer);
     void initialiseBackend();
+    void shutdownWorkers();
+    void createWorkers();
 
     std::unique_ptr<ModelBackend> backend_;
     std::unique_ptr<PaletteIndex> paletteIndex_;
@@ -74,6 +76,7 @@ private:
 
     double currentSampleRate_ = 44100.0;
     int samplesPerBlock_ = 0;
+    bool isPrepared_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NeuralMorphingAudioProcessor)
 };

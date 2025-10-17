@@ -20,26 +20,14 @@ NeuralMorphingAudioProcessor::NeuralMorphingAudioProcessor()
       decodedFifo_(64)
 {
     initialiseBackend();
-
-    paletteWorker_ = std::make_unique<PaletteWorker>(*backend_, *paletteIndex_);
-    matchWorker_ = std::make_unique<MatchWorker>(*backend_, *paletteIndex_, decodedFifo_);
+    createWorkers();
 
     monoScratch_.setSize(1, monoScratchReserve);
 }
 
 NeuralMorphingAudioProcessor::~NeuralMorphingAudioProcessor()
 {
-    if (paletteWorker_ != nullptr)
-    {
-        paletteWorker_->signalThreadShouldExit();
-        paletteWorker_->stopThread(2000);
-    }
-
-    if (matchWorker_ != nullptr)
-    {
-        matchWorker_->signalThreadShouldExit();
-        matchWorker_->stopThread(2000);
-    }
+    shutdownWorkers();
 }
 
 const juce::String NeuralMorphingAudioProcessor::getName() const
@@ -55,6 +43,8 @@ void NeuralMorphingAudioProcessor::prepareToPlay(double sampleRate, int samplesP
     onsetDetector_.prepare(sampleRate, 512, 256);
     onsetDetector_.reset();
 
+    isPrepared_ = true;
+
     if (paletteWorker_ != nullptr && !paletteWorker_->isThreadRunning())
         paletteWorker_->startThread();
 
@@ -66,6 +56,7 @@ void NeuralMorphingAudioProcessor::prepareToPlay(double sampleRate, int samplesP
 
 void NeuralMorphingAudioProcessor::releaseResources()
 {
+    isPrepared_ = false;
 }
 
 bool NeuralMorphingAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -208,6 +199,53 @@ void NeuralMorphingAudioProcessor::mixWetBuffer(juce::AudioBuffer<float>& buffer
     juce::ignoreUnused(buffer, dryBuffer);
 }
 
+void NeuralMorphingAudioProcessor::shutdownWorkers()
+{
+    if (paletteWorker_ != nullptr)
+    {
+        paletteWorker_->shutdown();
+
+        if (paletteWorker_->isThreadRunning())
+        {
+            paletteWorker_->signalThreadShouldExit();
+            paletteWorker_->stopThread(2000);
+        }
+        paletteWorker_.reset();
+    }
+
+    if (matchWorker_ != nullptr)
+    {
+        matchWorker_->shutdown();
+
+        if (matchWorker_->isThreadRunning())
+        {
+            matchWorker_->signalThreadShouldExit();
+            matchWorker_->stopThread(2000);
+        }
+        matchWorker_.reset();
+    }
+
+    decodedFifo_.clear();
+}
+
+void NeuralMorphingAudioProcessor::createWorkers()
+{
+    if (backend_ == nullptr || paletteIndex_ == nullptr)
+        return;
+
+    paletteWorker_ = std::make_unique<PaletteWorker>(*backend_, *paletteIndex_);
+    matchWorker_ = std::make_unique<MatchWorker>(*backend_, *paletteIndex_, decodedFifo_);
+
+    if (isPrepared_)
+    {
+        if (!paletteWorker_->isThreadRunning())
+            paletteWorker_->startThread();
+
+        if (!matchWorker_->isThreadRunning())
+            matchWorker_->startThread();
+    }
+}
+
 void NeuralMorphingAudioProcessor::initialiseBackend()
 {
     // Get backend selection from parameters
@@ -261,14 +299,13 @@ void NeuralMorphingAudioProcessor::switchBackend(int backendType)
         *param = backendType;
 
     // Clear current backend
+    shutdownWorkers();
     backend_.reset();
-    
+    paletteIndex_.reset();
+
     // Reinitialize with new backend
     initialiseBackend();
-    
-    // Update palette index with new embedding dimension
-    const int vectorDim = (backend_ != nullptr) ? juce::jmax(1, backend_->embeddingDimension()) : 2;
-    paletteIndex_ = std::make_unique<PaletteIndex>(vectorDim);
+    createWorkers();
 }
 
 juce::String NeuralMorphingAudioProcessor::getBackendStatus() const

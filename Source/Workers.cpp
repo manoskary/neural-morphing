@@ -35,6 +35,11 @@ juce::String PaletteWorker::status() const
     return statusMessage_;
 }
 
+void PaletteWorker::shutdown()
+{
+    workReady_.signal();
+}
+
 void PaletteWorker::run()
 {
     while (!threadShouldExit())
@@ -154,6 +159,12 @@ void MatchWorker::enqueue(const SegmentTask& task)
 void MatchWorker::clearQueue()
 {
     taskQueue_.clear();
+}
+
+void MatchWorker::shutdown()
+{
+    clearQueue();
+    workReady_.signal();
 }
 
 void MatchWorker::run()

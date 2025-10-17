@@ -304,16 +304,14 @@ ModelBackendHttp::HttpResponse ModelBackendHttp::makeHttpRequest(const juce::Str
     
     // Create URL options for the request
     juce::URL::InputStreamOptions options(juce::URL::ParameterHandling::inAddress);
-    options.withConnectionTimeoutMs(timeoutMs_);
-    
-    // Add headers for JSON content
-    if (jsonBody.isNotEmpty())
-    {
-        options.withExtraHeaders("Content-Type: application/json");
-    }
+    auto withTimeout = options.withConnectionTimeoutMs(timeoutMs_);
+    auto withHeaders = jsonBody.isNotEmpty()
+                            ? withTimeout.withExtraHeaders("Content-Type: application/json")
+                            : withTimeout;
+    auto streamOptions = method.isNotEmpty() ? withHeaders.withHttpRequestCmd(method) : withHeaders;
 
     // Make the request
-    std::unique_ptr<juce::InputStream> stream(url.createInputStream(options));
+    std::unique_ptr<juce::InputStream> stream(url.createInputStream(streamOptions));
     
     if (stream != nullptr)
     {

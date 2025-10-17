@@ -345,7 +345,21 @@ class LatentGranularSynthesis:
         final_np = final_audio.detach().cpu().numpy()
         final_np = np.squeeze(final_np)
 
-        return self.sample_rate, (np.clip(final_np, -1.0, 1.0) * 31000).astype(np.int16)
+        if final_np.ndim == 0:
+            final_np = np.expand_dims(final_np, axis=0)
+
+        if final_np.ndim == 1:
+            prepared = final_np
+        elif final_np.shape[0] <= final_np.shape[-1]:
+            # Heuristic: treat leading axis as channels when it is the smaller dimension.
+            prepared = np.moveaxis(final_np, 0, -1)
+        else:
+            prepared = final_np
+
+        clipped = np.clip(prepared, -1.0, 1.0)
+        scaled = (clipped * 32767).astype(np.int16, copy=False)
+
+        return self.sample_rate, scaled
 
 
 synth = LatentGranularSynthesis()

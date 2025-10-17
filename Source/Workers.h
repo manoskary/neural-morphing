@@ -31,6 +31,7 @@ public:
     bool isBusy() const noexcept { return busy_.load(); }
     double progress() const noexcept { return progress_.load(); }
     juce::String status() const;
+    void shutdown();
 
 protected:
     void run() override;
@@ -62,6 +63,7 @@ public:
     void enqueue(const SegmentTask& task);
     bool isBusy() const noexcept { return busy_.load(); }
     void clearQueue();
+    void shutdown();
 
 protected:
     void run() override;
