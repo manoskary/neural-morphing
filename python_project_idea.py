@@ -7,6 +7,8 @@ target audio signal to its closest counterpart in the codebook.
 """
 
 import contextlib
+import os
+from pathlib import Path
 
 import gradio as gr
 import librosa
@@ -50,6 +52,47 @@ class LatentGranularSynthesis:
         self.db = None
         self.db_flat = None
         self.db_flat_device = None
+
+    @staticmethod
+    def _resolve_file_entry(entry):
+        """Best-effort resolve of Gradio file payloads into filesystem paths."""
+        if entry is None:
+            return None
+
+        if isinstance(entry, (str, os.PathLike)):
+            return Path(entry).expanduser()
+
+        if isinstance(entry, dict):
+            candidate = entry.get("path") or entry.get("name")
+            if candidate:
+                return Path(candidate).expanduser()
+
+        for attr in ("name", "path"):
+            candidate = getattr(entry, attr, None)
+            if candidate:
+                return Path(candidate).expanduser()
+
+        return None
+
+    def _materialize_files(self, files):
+        if files is None:
+            return []
+
+        candidates = files if isinstance(files, (list, tuple)) else [files]
+
+        resolved = []
+        for entry in candidates:
+            path = self._resolve_file_entry(entry)
+            if path is None:
+                continue
+
+            if not path.exists():
+                print(f"Skipping missing file: {path}")
+                continue
+
+            resolved.append(str(path))
+
+        return resolved
 
     def encode(self, audio_array):
         """Encode audio using DAC."""
@@ -105,8 +148,16 @@ class LatentGranularSynthesis:
 
     def _stream_audio(self, path):
         """Yield normalized mono chunks from disk to keep memory usage low."""
+        if not path:
+            return
+
+        path_obj = Path(path)
+        if not path_obj.exists():
+            print(f"Stream skipped, file not found: {path}")
+            return
+
         try:
-            with sf.SoundFile(path) as source:
+            with sf.SoundFile(str(path_obj)) as source:
                 source_sr = source.samplerate
                 block_frames = max(int(self.chunk_duration_s * source_sr), source_sr)
                 while True:
@@ -172,6 +223,8 @@ class LatentGranularSynthesis:
 
         self.db = torch.cat(segment_views, dim=0).to(torch.float32)
         self.db_flat = self.db.reshape(self.db.shape[0], -1).contiguous()
+        if self.db_flat.numel() > 0:
+            self.db_flat = torch.nan_to_num(F.normalize(self.db_flat, dim=1), nan=0.0, posinf=0.0, neginf=0.0)
         self._prepare_match_tensors()
 
     def _prepare_match_tensors(self):
@@ -191,19 +244,20 @@ class LatentGranularSynthesis:
             return torch.empty(0)
 
         target_vec = target_code.reshape(-1).to(torch.float32)
+        target_vec = torch.nan_to_num(F.normalize(target_vec, dim=0), nan=0.0, posinf=0.0, neginf=0.0)
         distances = []
 
         if self.db_flat_device is not None:
             target_vec = target_vec.to(self.db_flat_device.dtype).to(self.device)
             for start in range(0, self.db_flat_device.shape[0], self.match_batch):
                 chunk = self.db_flat_device[start:start + self.match_batch]
-                sims = F.cosine_similarity(chunk, target_vec.unsqueeze(0), dim=1)
+                sims = torch.matmul(chunk, target_vec)
                 distances.append((1 - sims).cpu())
         else:
             target_vec = target_vec.to(self.db_flat.dtype)
             for start in range(0, self.db_flat.shape[0], self.match_batch):
                 chunk = self.db_flat[start:start + self.match_batch]
-                sims = F.cosine_similarity(chunk, target_vec.unsqueeze(0), dim=1)
+                sims = torch.matmul(chunk, target_vec)
                 distances.append(1 - sims)
 
         if not distances:
@@ -222,7 +276,11 @@ class LatentGranularSynthesis:
             self._finalize_codebook()
 
     def build_dataset(self, files, aug_checkbox: bool):
-        self.files = files
+        resolved_files = self._materialize_files(files)
+        if not resolved_files:
+            return {"message": "Please upload at least one audio file before building the palette."}
+
+        self.files = resolved_files
         self.codedb_segments = []
         self.codedb = None
         self.db = None
@@ -231,11 +289,12 @@ class LatentGranularSynthesis:
 
         n_files = 0
 
-        for path in files:
+        for path in resolved_files:
             processed_any = False
+            path_str = str(path)
             try:
                 if aug_checkbox:
-                    y, _ = librosa.load(path, sr=self.sample_rate, mono=True)
+                    y, _ = librosa.load(path_str, sr=self.sample_rate, mono=True)
                     y = librosa.util.normalize(y.astype(np.float32, copy=False))
                     processed_any |= self._ingest_audio_segment(y)
 
@@ -247,7 +306,7 @@ class LatentGranularSynthesis:
                         y_pitch = librosa.util.normalize(y_pitch.astype(np.float32, copy=False))
                         processed_any |= self._ingest_audio_segment(y_pitch)
                 else:
-                    for chunk in self._stream_audio(path):
+                    for chunk in self._stream_audio(path_str):
                         processed_any |= self._ingest_audio_segment(chunk)
 
                 if processed_any:
@@ -268,13 +327,17 @@ class LatentGranularSynthesis:
         return {"message": f"Done! {n_files} files processed. Codebook grains: {codebook_size}."}
  
     def morph_audio(self, target_file):
+        target_path = self._resolve_file_entry(target_file)
+        if target_path is None or not target_path.exists():
+            return self.sample_rate, np.zeros(1024, dtype=np.int16)
+
         if self.db is None or self.db.numel() == 0:
             return self.sample_rate, np.zeros(1024, dtype=np.int16)
 
         print("Creating codes for target audio")
         target_segments = []
 
-        for chunk in self._stream_audio(target_file):
+        for chunk in self._stream_audio(str(target_path)):
             _, quantized = self.encode(chunk)
             if quantized is not None and quantized.shape[-1] >= self.unit:
                 target_segments.append(quantized)
@@ -379,6 +442,7 @@ def unit(unit, stride):
 
 def _build_demo():
     with gr.Blocks() as demo:
+        gr.Markdown("**Step 1:** Upload and process source sounds before morphing a target clip.")
         with gr.Row():
             with gr.Column():
                 db_file = gr.File(file_count="multiple", label="Source Sounds")

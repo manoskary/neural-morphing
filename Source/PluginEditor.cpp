@@ -2,6 +2,7 @@
 #include "PluginProcessor.h"
 #include "JuceHeader.h"
 #include "BinaryData.h"
+#include <cmath>
 
 namespace
 {
@@ -150,6 +151,8 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     : juce::AudioProcessorEditor(&p), processor_(p)
 {
     setLookAndFeel(&lookAndFeel_);
+    formatManager_.registerBasicFormats();
+    showStandaloneSource_ = processor_.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
 
     backgroundImage_ = juce::ImageCache::getFromMemory(BinaryData::vst_background_png, BinaryData::vst_background_pngSize);
     logoImage_ = juce::ImageCache::getFromMemory(BinaryData::name_long_logo_png, BinaryData::name_long_logo_pngSize);
@@ -159,6 +162,12 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     addAndMakeVisible(rebuildButton_);
     addAndMakeVisible(statusLabel_);
     addAndMakeVisible(progressLabel_);
+    if (showStandaloneSource_)
+    {
+        addAndMakeVisible(loadSourceButton_);
+        addAndMakeVisible(clearSourceButton_);
+        addAndMakeVisible(sourceStatusLabel_);
+    }
 
     setupSlider(temperatureSlider_, "Temperature");
     setupSlider(thresholdSlider_, "Threshold");
@@ -209,14 +218,20 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     progressLabel_.setJustificationType(juce::Justification::centredRight);
     statusLabel_.setColour(juce::Label::textColourId, textGrey);
     progressLabel_.setColour(juce::Label::textColourId, neonGreen.withAlpha(0.9f));
+    sourceStatusLabel_.setJustificationType(juce::Justification::centredLeft);
+    sourceStatusLabel_.setColour(juce::Label::textColourId, textGrey);
 
     loadButton_.setColour(juce::TextButton::buttonColourId, accentGrey);
     clearButton_.setColour(juce::TextButton::buttonColourId, accentGrey);
     rebuildButton_.setColour(juce::TextButton::buttonColourId, accentGrey);
+    loadSourceButton_.setColour(juce::TextButton::buttonColourId, accentGrey);
+    clearSourceButton_.setColour(juce::TextButton::buttonColourId, accentGrey);
 
     loadButton_.addListener(this);
     clearButton_.addListener(this);
     rebuildButton_.addListener(this);
+    loadSourceButton_.addListener(this);
+    clearSourceButton_.addListener(this);
     backendSelector_.addListener(this);
 
     startTimerHz(10);
@@ -229,6 +244,8 @@ NeuralMorphingAudioProcessorEditor::~NeuralMorphingAudioProcessorEditor()
     loadButton_.removeListener(this);
     clearButton_.removeListener(this);
     rebuildButton_.removeListener(this);
+    loadSourceButton_.removeListener(this);
+    clearSourceButton_.removeListener(this);
     backendSelector_.removeListener(this);
 }
 
@@ -381,6 +398,24 @@ void NeuralMorphingAudioProcessorEditor::resized()
     progressLabel_.setBounds(statusArea);
     currentY += 24 + 4;
 
+    if (showStandaloneSource_)
+    {
+        juce::Rectangle<int> sourceRow(controlsX, currentY, controlsWidth, 32);
+        constexpr int sourceGap = 12;
+        const int sourceButtonWidth = juce::jmax(140, (sourceRow.getWidth() - sourceGap * 2) / 3);
+
+        auto loadBounds = sourceRow.removeFromLeft(sourceButtonWidth);
+        loadSourceButton_.setBounds(loadBounds);
+        sourceRow.removeFromLeft(sourceGap);
+
+        auto clearBounds = sourceRow.removeFromLeft(sourceButtonWidth);
+        clearSourceButton_.setBounds(clearBounds);
+        sourceRow.removeFromLeft(sourceGap);
+
+        sourceStatusLabel_.setBounds(sourceRow);
+        currentY += 32 + 4;
+    }
+
     // Backend selector row
     juce::Rectangle<int> backendArea(controlsX, currentY, controlsWidth, 32);
     backendSelector_.setBounds(backendArea.removeFromLeft(220).reduced(2));
@@ -469,21 +504,40 @@ void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
         juce::String initialPath = lastDirectory_.exists() ? lastDirectory_.getFullPathName() : juce::File::getSpecialLocation(juce::File::userHomeDirectory).getFullPathName();
         
         // Use the asynchronous version for better compatibility
-        auto chooser = std::make_unique<juce::FileChooser>("Select palette audio", juce::File(initialPath), "*.wav;*.flac;*.mp3;*.aiff;*.ogg");
-        chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+        auto chooser = std::make_unique<juce::FileChooser>("Select target palette audio", juce::File(initialPath), "*.wav;*.flac;*.mp3;*.aiff;*.ogg");
+        chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems,
                            [this, chooserPtr = chooser.get()](const juce::FileChooser& fc)
                            {
-                               auto result = fc.getResult();
-                               if (result != juce::File{})
-                               {
-                                   lastFiles_.clear();
-                                   lastFiles_.push_back(result);
+                               auto results = fc.getResults();
+                               if (results.isEmpty())
+                                   return;
 
-                                   if (!lastFiles_.empty())
+                               for (const auto& file : results)
+                               {
+                                   if (file == juce::File{})
+                                       continue;
+
+                                   auto alreadyAdded = false;
+                                   for (const auto& existing : lastFiles_)
                                    {
-                                       lastDirectory_ = lastFiles_.front().getParentDirectory();
-                                       if (auto* worker = processor_.getPaletteWorker())
-                                           worker->requestBuild(lastFiles_, true);
+                                       if (existing == file)
+                                       {
+                                           alreadyAdded = true;
+                                           break;
+                                       }
+                                   }
+
+                                   if (!alreadyAdded)
+                                       lastFiles_.push_back(file);
+                               }
+
+                               if (!lastFiles_.empty())
+                               {
+                                   lastDirectory_ = results.getFirst().getParentDirectory();
+                                   if (auto* worker = processor_.getPaletteWorker())
+                                   {
+                                       worker->requestBuild(lastFiles_, true);
+                                       processor_.invalidateMorphCache();
                                    }
                                }
                            });
@@ -493,12 +547,68 @@ void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
     {
         lastFiles_.clear();
         if (auto* worker = processor_.getPaletteWorker())
+        {
             worker->requestBuild({}, true);
+            processor_.invalidateMorphCache();
+        }
     }
     else if (button == &rebuildButton_)
     {
         if (auto* worker = processor_.getPaletteWorker())
+        {
             worker->requestBuild(lastFiles_, true);
+            processor_.invalidateMorphCache();
+        }
+    }
+    else if (button == &loadSourceButton_)
+    {
+        juce::String initialPath = lastDirectory_.exists() ? lastDirectory_.getFullPathName() : juce::File::getSpecialLocation(juce::File::userHomeDirectory).getFullPathName();
+        auto chooser = std::make_unique<juce::FileChooser>("Select source audio", juce::File(initialPath), "*.wav;*.flac;*.mp3;*.aiff;*.ogg");
+        chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                             [this, chooserPtr = chooser.get()](const juce::FileChooser& fc)
+                             {
+                                 auto result = fc.getResult();
+                                 if (result == juce::File{})
+                                     return;
+
+                                 std::unique_ptr<juce::AudioFormatReader> reader(formatManager_.createReaderFor(result));
+                                 if (reader == nullptr || reader->lengthInSamples <= 0)
+                                     return;
+
+                                 lastDirectory_ = result.getParentDirectory();
+
+                                 const int64_t length = reader->lengthInSamples;
+                                 juce::AudioBuffer<float> sourceBuffer(static_cast<int>(reader->numChannels), static_cast<int>(length));
+                                 reader->read(&sourceBuffer, 0, static_cast<int>(length), 0, true, true);
+
+                                 const double desiredSampleRate = processor_.getSampleRate() > 0.0 ? processor_.getSampleRate() : reader->sampleRate;
+                                 if (std::abs(reader->sampleRate - desiredSampleRate) > 1.0)
+                                 {
+                                     const double ratio = reader->sampleRate / desiredSampleRate;
+                                     const int outputSamples = static_cast<int>(std::ceil(static_cast<double>(length) / ratio));
+                                     juce::AudioBuffer<float> resampled(static_cast<int>(reader->numChannels), outputSamples);
+                                     resampled.clear();
+
+                                     for (int ch = 0; ch < resampled.getNumChannels(); ++ch)
+                                     {
+                                         juce::LagrangeInterpolator interpolator;
+                                         interpolator.reset();
+                                         interpolator.process(ratio,
+                                                              sourceBuffer.getReadPointer(ch),
+                                                              resampled.getWritePointer(ch),
+                                                              outputSamples);
+                                     }
+
+                                     sourceBuffer = std::move(resampled);
+                                 }
+
+                                 processor_.setStandaloneSource(std::move(sourceBuffer), desiredSampleRate, result.getFileName());
+                             });
+        chooser.release();
+    }
+    else if (button == &clearSourceButton_)
+    {
+        processor_.clearStandaloneSource();
     }
 }
 
@@ -525,6 +635,9 @@ void NeuralMorphingAudioProcessorEditor::timerCallback()
             progressText = "Ready";
     }
 
+    if (!lastFiles_.empty())
+        statusText = "Palette: " + juce::String(lastFiles_.size()) + " files | " + statusText;
+
     if (auto* match = processor_.getMatchWorker())
     {
         if (match->isBusy())
@@ -537,6 +650,14 @@ void NeuralMorphingAudioProcessorEditor::timerCallback()
     // Update backend status
     juce::String backendStatus = processor_.getBackendStatus();
     statusDisplayLabel_.setText(backendStatus, juce::dontSendNotification);
+
+    if (showStandaloneSource_)
+    {
+        juce::String sourceText = "Source: none loaded";
+        if (processor_.hasStandaloneSource())
+            sourceText = "Source: " + processor_.standaloneSourceName();
+        sourceStatusLabel_.setText(sourceText, juce::dontSendNotification);
+    }
 }
 
 void NeuralMorphingAudioProcessorEditor::setupSlider(juce::Slider& slider, const juce::String& name)

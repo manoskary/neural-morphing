@@ -8,6 +8,38 @@ A JUCE-based VST3/AU insert effect that morphs incoming audio into a palette of 
 - `python_project_idea.py` – original Python prototype used to explore the morphing pipeline.
 - `requirements.txt` – Python dependencies for the export tool and prototype notebooks.
 
+## Terminology
+
+- **Target files (palette)** – the sound profiles the input should morph toward (usually a set of short clips).
+- **Source input** – audio being morphed (DAW track audio or, in standalone, a loaded source file).
+
+## Runtime Flow
+
+**DAW insert**
+1. Load target files to build the palette (DAC tokens + latent vectors).
+2. The DAW feeds track audio to the plugin; each block is encoded, matched to the palette (greedy nearest-neighbour), decoded, then mixed with dry.
+3. If you change palette/parameters, the track is reprocessed by the DAW (bounce/re-render) rather than the plugin mutating already-rendered audio.
+
+**Standalone**
+1. Load target files to build the palette.
+2. Load a source audio file (standalone UI) to drive morphing.
+3. Playback runs through the file once; reload to replay.
+
+## UI Sketch
+
+```
+[Add Target Files] [Clear Palette] [Rebuild]
+[Load Source Audio] [Clear Source]  Source: <filename>   (standalone only)
+Status: <palette status>                         Progress: <percent>
+Backend: Native / Python Bridge
+Knobs: Temperature | Threshold | Unit | Stride | Similarity | Envelope | Dry/Wet | Output
+```
+
+## Performance Notes
+
+- Lightweight cache stores recently decoded morph blocks to avoid recomputing repeats.
+- Temporal smoothing is applied to the morphed output (controlled by the Envelope slider; 0 disables smoothing).
+
 ## Prerequisites
 
 - **JUCE** checked out as a submodule (`git submodule update --init --recursive`).
@@ -54,6 +86,18 @@ After a successful build you can install the plugin:
 4. Ensure the CMake build is configured with ONNX Runtime available (`-DNEURAL_MORPHING_ENABLE_ONNX=ON`).
 
 If the environment variable is absent or ONNX Runtime is unavailable, the plugin automatically falls back to the stub backend for development.
+
+## Roadmap (Short)
+
+- Palette file metadata + persistent state so sessions restore target lists.
+- Incremental palette builds (append without full rebuild) with per-file progress.
+- Standalone source recorder (in addition to file upload).
+
+## Novelty Ideas (Later)
+
+- Palette blending: interpolate between top-k matches for “style mixing.”
+- Latent morph automation: sweep across palette clusters using MIDI/automation.
+- Semantic tags for palette files and tag-driven matching curves.
 
 ## TODO
 

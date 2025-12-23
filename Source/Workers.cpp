@@ -80,7 +80,16 @@ void PaletteWorker::processFiles()
 
     busy_.store(true, std::memory_order_release);
     progress_.store(0.0, std::memory_order_release);
-    index_.clear();
+
+    if (rebuild)
+        index_.clear();
+
+    index_.prepareForSamples(static_cast<int>(files.size()));
+
+    {
+        const juce::ScopedLock lock(stateMutex_);
+        statusMessage_ = "Indexing " + juce::String(files.size()) + " target files";
+    }
 
     for (size_t i = 0; i < files.size(); ++i)
     {
@@ -88,6 +97,10 @@ void PaletteWorker::processFiles()
             break;
 
         auto file = files[i];
+        {
+            const juce::ScopedLock lock(stateMutex_);
+            statusMessage_ = "Indexing " + file.getFileName() + " (" + juce::String(i + 1) + "/" + juce::String(files.size()) + ")";
+        }
         std::unique_ptr<juce::AudioFormatReader> reader(formatManager_.createReaderFor(file));
         if (reader == nullptr)
         {
@@ -111,6 +124,8 @@ void PaletteWorker::processFiles()
         auto tokens = backend_.encodePCM(monoBuffer);
         if (tokens.empty())
             continue;
+
+        index_.setTokenBlock(static_cast<int>(i), tokens);
 
         for (int frame = 0; frame < tokens.frames; ++frame)
         {

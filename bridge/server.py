@@ -5,10 +5,11 @@ Neural Morphing Python Bridge Server
 FastAPI server that exposes DAC model endpoints for the Neural Morphing plugin.
 """
 
-import os
 import base64
+import io
 import logging
-import tempfile
+import os
+from pathlib import Path
 from typing import List
 
 import librosa
@@ -113,8 +114,12 @@ def initialize_dac_model():
 
 def _stream_audio_windows(path: str, target_sr: int, window_seconds: float):
     """Yield normalized mono chunks from disk to reduce peak memory usage."""
+    path_obj = Path(path).expanduser()
+    if not path_obj.exists():
+        raise FileNotFoundError(f"Audio file does not exist: {path}")
+
     try:
-        with sf.SoundFile(path) as source:
+        with sf.SoundFile(str(path_obj)) as source:
             src_sr = source.samplerate
             window_frames = max(int(window_seconds * src_sr), 1)
 
@@ -137,6 +142,7 @@ def _stream_audio_windows(path: str, target_sr: int, window_seconds: float):
         logger.error("Audio streaming failed for '%s': %s", path, exc)
         raise
 
+@torch.inference_mode()
 def encode_audio(audio_path: str) -> tuple:
     """Encode audio file using DAC"""
     try:
@@ -156,8 +162,7 @@ def encode_audio(audio_path: str) -> tuple:
 
             inputs = {k: v.to(device) for k, v in inputs.items()}
 
-            with torch.no_grad():
-                encoder_outputs = dac_model.encode(inputs["input_values"])
+            encoder_outputs = dac_model.encode(inputs["input_values"])
 
             audio_codes = encoder_outputs.audio_codes.detach().cpu().contiguous()
 
@@ -165,11 +170,6 @@ def encode_audio(audio_path: str) -> tuple:
                 batch_size = int(audio_codes.shape[0])
             elif batch_size != audio_codes.shape[0]:
                 raise RuntimeError("Inconsistent batch size encountered during encoding")
-
-            if num_codebooks is None:
-                num_codebooks = int(audio_codes.shape[1])
-            elif num_codebooks != audio_codes.shape[1]:
-                raise RuntimeError("Inconsistent codebook count during encoding")
 
             if num_codebooks is None:
                 num_codebooks = int(audio_codes.shape[1])
@@ -201,6 +201,7 @@ def encode_audio(audio_path: str) -> tuple:
         logger.error(f"Failed to encode audio {audio_path}: {e}")
         raise
 
+@torch.inference_mode()
 def tokens_to_vector(tokens: List[int], B: int, T: int, frame_index: int) -> List[float]:
     """Convert tokens to embedding vector for a specific frame"""
     try:
@@ -215,18 +216,13 @@ def tokens_to_vector(tokens: List[int], B: int, T: int, frame_index: int) -> Lis
 
         num_codebooks = len(tokens) // (B * T)
 
-        frame_tokens = torch.empty((B, num_codebooks, 1), dtype=torch.long)
+        if num_codebooks <= 0:
+            raise ValueError("Token payload appears to be empty")
 
-        for b in range(B):
-            batch_offset = b * num_codebooks * T
-            for c in range(num_codebooks):
-                idx = batch_offset + c * T + frame_index
-                frame_tokens[b, c, 0] = tokens[idx]
+        tokens_tensor = torch.as_tensor(tokens, dtype=torch.long).view(B, num_codebooks, T)
+        frame_tokens = tokens_tensor[:, :, frame_index : frame_index + 1].to(device)
 
-        frame_tokens = frame_tokens.to(device)
-
-        with torch.no_grad():
-            quantized_representation, _, _ = dac_model.quantizer.from_codes(frame_tokens)
+        quantized_representation, _, _ = dac_model.quantizer.from_codes(frame_tokens)
 
         frame_vector = quantized_representation[:, :, 0]
         embedding = frame_vector.squeeze(0).detach().cpu().tolist()
@@ -237,6 +233,7 @@ def tokens_to_vector(tokens: List[int], B: int, T: int, frame_index: int) -> Lis
         logger.error(f"Failed to convert tokens to vector: {e}")
         raise
 
+@torch.inference_mode()
 def decode_tokens(tokens: List[int], B: int, T: int) -> bytes:
     """Decode tokens back to audio using DAC"""
     try:
@@ -248,17 +245,17 @@ def decode_tokens(tokens: List[int], B: int, T: int) -> bytes:
 
         num_codebooks = len(tokens) // (B * T)
 
-        tokens_tensor = torch.tensor(tokens, dtype=torch.long)
-        tokens_tensor = tokens_tensor.reshape(B, num_codebooks, T)
+        if num_codebooks <= 0:
+            raise ValueError("Token payload appears to be empty")
 
-        decoded_audio = None
+        tokens_tensor = torch.as_tensor(tokens, dtype=torch.long).view(B, num_codebooks, T)
+        decoded_chunks: List[torch.Tensor] = []
 
         for chunk_idx, start in enumerate(range(0, T, DECODE_CHUNK_FRAMES)):
             end = min(start + DECODE_CHUNK_FRAMES, T)
             chunk_codes = tokens_tensor[:, :, start:end].to(device)
 
-            with torch.no_grad():
-                decoded_chunk = dac_model.decode(audio_codes=chunk_codes)
+            decoded_chunk = dac_model.decode(audio_codes=chunk_codes)
 
             audio_values = decoded_chunk.audio_values if hasattr(decoded_chunk, "audio_values") else decoded_chunk
             audio_chunk = audio_values.detach().cpu()
@@ -269,13 +266,12 @@ def decode_tokens(tokens: List[int], B: int, T: int) -> bytes:
                 end - start,
             )
 
-            if decoded_audio is None:
-                decoded_audio = audio_chunk
-            else:
-                decoded_audio = torch.cat((decoded_audio, audio_chunk), dim=-1)
+            decoded_chunks.append(audio_chunk)
 
-        if decoded_audio is None:
+        if not decoded_chunks:
             raise ValueError("No audio could be reconstructed from tokens")
+
+        decoded_audio = torch.cat(decoded_chunks, dim=-1)
 
         audio_np = decoded_audio.numpy()
         audio_np = np.squeeze(audio_np)
@@ -283,15 +279,12 @@ def decode_tokens(tokens: List[int], B: int, T: int) -> bytes:
         if audio_np.ndim > 1:
             audio_np = np.mean(audio_np, axis=0)
 
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-            sf.write(tmp_file.name, audio_np, sample_rate)
+        audio_np = np.ascontiguousarray(audio_np, dtype=np.float32)
 
-            with open(tmp_file.name, "rb") as f:
-                wav_bytes = f.read()
-
-        os.unlink(tmp_file.name)
-
-        return wav_bytes
+        with io.BytesIO() as buffer:
+            sf.write(buffer, audio_np, sample_rate, format="WAV")
+            buffer.seek(0)
+            return buffer.read()
         
     except Exception as e:
         logger.error(f"Failed to decode tokens: {e}")
@@ -316,12 +309,13 @@ async def health_check():
 async def encode_endpoint(request: EncodeRequest):
     """Encode audio file to tokens"""
     try:
-        if not os.path.exists(request.path):
+        audio_path = Path(request.path).expanduser()
+        if not audio_path.exists():
             raise HTTPException(status_code=404, detail=f"Audio file not found: {request.path}")
 
-        logger.info("/encode start path='%s'", request.path)
-        B, T, tokens, num_codebooks = encode_audio(request.path)
-        logger.info("/encode done path='%s' frames=%s codebooks=%s tokens=%s", request.path, T, num_codebooks, len(tokens))
+        logger.info("/encode start path='%s'", audio_path)
+        B, T, tokens, num_codebooks = encode_audio(str(audio_path))
+        logger.info("/encode done path='%s' frames=%s codebooks=%s tokens=%s", audio_path, T, num_codebooks, len(tokens))
 
         return EncodeResponse(
             B=B,

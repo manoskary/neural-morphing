@@ -3,6 +3,7 @@
 #include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_gui_extra/juce_gui_extra.h>
 
 class NeuralMorphingLookAndFeel : public juce::LookAndFeel_V4
@@ -57,9 +58,12 @@ private:
     juce::TextButton loadButton_{ "Add Target Files" };
     juce::TextButton clearButton_{ "Clear Palette" };
     juce::TextButton rebuildButton_{ "Rebuild" };
+    juce::TextButton loadSourceButton_{ "Load Source Audio" };
+    juce::TextButton clearSourceButton_{ "Clear Source" };
 
     juce::Label statusLabel_;
     juce::Label progressLabel_;
+    juce::Label sourceStatusLabel_;
 
     juce::Slider temperatureSlider_;
     juce::Slider thresholdSlider_;
@@ -90,6 +94,8 @@ private:
 
     juce::File lastDirectory_;
     std::vector<juce::File> lastFiles_;
+    bool showStandaloneSource_ = false;
+    juce::AudioFormatManager formatManager_;
 
     juce::Image backgroundImage_;
     juce::Image logoImage_;

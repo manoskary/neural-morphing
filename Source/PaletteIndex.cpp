@@ -15,6 +15,7 @@ void PaletteIndex::clear()
     vectors_.clear();
     metas_.clear();
     norms_.clear();
+    tokenBlocks_.clear();
 }
 
 void PaletteIndex::add(const std::vector<float>& vectorRow, PaletteMeta meta)
@@ -28,6 +29,46 @@ void PaletteIndex::add(const std::vector<float>& vectorRow, PaletteMeta meta)
 
     const float norm = std::sqrt(std::inner_product(vectorRow.begin(), vectorRow.end(), vectorRow.begin(), 0.0f) + 1.0e-9f);
     norms_.push_back(norm);
+}
+
+void PaletteIndex::prepareForSamples(int count)
+{
+    std::scoped_lock lock(mutex_);
+    tokenBlocks_.clear();
+    tokenBlocks_.resize(static_cast<size_t>(std::max(0, count)));
+}
+
+void PaletteIndex::setTokenBlock(int sampleId, TokenBlock block)
+{
+    if (sampleId < 0)
+        return;
+
+    std::scoped_lock lock(mutex_);
+    if (static_cast<size_t>(sampleId) >= tokenBlocks_.size())
+        tokenBlocks_.resize(static_cast<size_t>(sampleId) + 1);
+
+    tokenBlocks_[static_cast<size_t>(sampleId)] = std::move(block);
+}
+
+const TokenBlock* PaletteIndex::tokenBlockForSample(int sampleId) const
+{
+    if (sampleId < 0)
+        return nullptr;
+
+    std::scoped_lock lock(mutex_);
+    if (static_cast<size_t>(sampleId) >= tokenBlocks_.size())
+        return nullptr;
+
+    const auto& block = tokenBlocks_[static_cast<size_t>(sampleId)];
+    if (block.tokens.empty())
+        return nullptr;
+
+    return &block;
+}
+
+const TokenBlock* PaletteIndex::tokensForMeta(const PaletteMeta& meta) const
+{
+    return tokenBlockForSample(meta.sampleId);
 }
 
 void PaletteIndex::build()
