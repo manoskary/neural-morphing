@@ -17,6 +17,12 @@ struct MatchResult
     float distance = 0.0f;
 };
 
+struct GrainConfig
+{
+    int unit = 1;
+    int stride = 1;
+};
+
 class PaletteIndex
 {
 public:
@@ -28,6 +34,11 @@ public:
 
     std::vector<MatchResult> query(const std::vector<float>& queryVector, int k) const;
 
+    void setGrainConfig(int unit, int stride);
+    GrainConfig grainConfig() const;
+    bool getVector(int index, std::vector<float>& out) const;
+    float cosineDistance(int indexA, int indexB) const;
+
     void prepareForSamples(int count);
     void setTokenBlock(int sampleId, TokenBlock block);
     const TokenBlock* tokenBlockForSample(int sampleId) const;
@@ -38,12 +49,11 @@ public:
     int size() const noexcept { return static_cast<int>(vectors_.size()); }
 
 private:
-    float cosineDistance(const std::vector<float>& a, const std::vector<float>& b) const;
-
     int dims_ = 0;
     std::vector<std::vector<float>> vectors_;
     std::vector<PaletteMeta> metas_;
     std::vector<float> norms_;
     std::vector<TokenBlock> tokenBlocks_;
+    GrainConfig grainConfig_;
     mutable std::mutex mutex_;
 };

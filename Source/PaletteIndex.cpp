@@ -16,6 +16,7 @@ void PaletteIndex::clear()
     metas_.clear();
     norms_.clear();
     tokenBlocks_.clear();
+    grainConfig_ = {};
 }
 
 void PaletteIndex::add(const std::vector<float>& vectorRow, PaletteMeta meta)
@@ -76,6 +77,48 @@ void PaletteIndex::build()
     // Placeholder: when switching to ANN, build the index here.
 }
 
+void PaletteIndex::setGrainConfig(int unit, int stride)
+{
+    std::scoped_lock lock(mutex_);
+    grainConfig_.unit = std::max(1, unit);
+    grainConfig_.stride = std::max(1, stride);
+}
+
+GrainConfig PaletteIndex::grainConfig() const
+{
+    std::scoped_lock lock(mutex_);
+    return grainConfig_;
+}
+
+bool PaletteIndex::getVector(int index, std::vector<float>& out) const
+{
+    std::scoped_lock lock(mutex_);
+    if (index < 0 || static_cast<size_t>(index) >= vectors_.size())
+        return false;
+
+    out = vectors_[static_cast<size_t>(index)];
+    return true;
+}
+
+float PaletteIndex::cosineDistance(int indexA, int indexB) const
+{
+    std::scoped_lock lock(mutex_);
+    if (indexA < 0 || indexB < 0)
+        return 1.0f;
+
+    const size_t idxA = static_cast<size_t>(indexA);
+    const size_t idxB = static_cast<size_t>(indexB);
+    if (idxA >= vectors_.size() || idxB >= vectors_.size())
+        return 1.0f;
+
+    float dot = 0.0f;
+    for (size_t i = 0; i < vectors_[idxA].size(); ++i)
+        dot += vectors_[idxA][i] * vectors_[idxB][i];
+
+    const float denom = (norms_[idxA] * norms_[idxB]) + 1.0e-9f;
+    return 1.0f - dot / denom;
+}
+
 std::vector<MatchResult> PaletteIndex::query(const std::vector<float>& queryVector, int k) const
 {
     std::vector<MatchResult> results;
@@ -89,7 +132,8 @@ std::vector<MatchResult> PaletteIndex::query(const std::vector<float>& queryVect
     std::scoped_lock lock(mutex_);
     for (size_t i = 0; i < vectors_.size(); ++i)
     {
-        const float dist = cosineDistance(queryVector, vectors_[i]) / (queryNorm * norms_[i] + 1.0e-9f);
+        const float dot = std::inner_product(queryVector.begin(), queryVector.end(), vectors_[i].begin(), 0.0f);
+        const float dist = 1.0f - dot / (queryNorm * norms_[i] + 1.0e-9f);
         results.push_back({ static_cast<int>(i), dist });
     }
 
@@ -104,13 +148,4 @@ std::vector<MatchResult> PaletteIndex::query(const std::vector<float>& queryVect
         results.resize(static_cast<size_t>(k));
 
     return results;
-}
-
-float PaletteIndex::cosineDistance(const std::vector<float>& a, const std::vector<float>& b) const
-{
-    float dot = 0.0f;
-    for (size_t i = 0; i < a.size(); ++i)
-        dot += a[i] * b[i];
-
-    return 1.0f - dot;
 }

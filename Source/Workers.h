@@ -27,7 +27,7 @@ public:
     PaletteWorker(ModelBackend& backend, PaletteIndex& index);
     ~PaletteWorker() override;
 
-    void requestBuild(const std::vector<juce::File>& files, bool rebuildIndex);
+    void requestBuild(const std::vector<juce::File>& files, bool rebuildIndex, int unit, int stride);
     bool isBusy() const noexcept { return busy_.load(); }
     double progress() const noexcept { return progress_.load(); }
     juce::String status() const;
@@ -43,6 +43,8 @@ private:
     PaletteIndex& index_;
     juce::AudioFormatManager formatManager_;
     std::vector<juce::File> pendingFiles_;
+    int buildUnit_ = 1;
+    int buildStride_ = 1;
 
     std::atomic<bool> rebuildRequested_{ false };
     std::atomic<bool> busy_{ false };

@@ -78,6 +78,7 @@ private:
     bool renderStandaloneSource(juce::AudioBuffer<float>& buffer);
     void resetMorphSmoothing();
     uint64_t hashTokenBlock(const TokenBlock& block) const;
+    uint64_t hashMorphKey(const TokenBlock& block) const;
 
     void refreshBackendSampleRate(double sampleRate);
     void mixWetBuffer(juce::AudioBuffer<float>& buffer, juce::AudioBuffer<float>& dryBuffer);
@@ -114,6 +115,7 @@ private:
     std::vector<float> morphSmoothingState_;
     mutable juce::SpinLock morphCacheMutex_;
     std::atomic<bool> resetSmoothingPending_{ false };
+    int lastMatchedIndex_ = -1;
 
     mutable juce::CriticalSection standaloneMutex_;
     juce::AudioBuffer<float> standaloneSourceBuffer_;

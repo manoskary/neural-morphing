@@ -17,11 +17,13 @@ PaletteWorker::~PaletteWorker()
     stopThread(2000);
 }
 
-void PaletteWorker::requestBuild(const std::vector<juce::File>& files, bool rebuildIndex)
+void PaletteWorker::requestBuild(const std::vector<juce::File>& files, bool rebuildIndex, int unit, int stride)
 {
     {
         const juce::ScopedLock lock(stateMutex_);
         pendingFiles_ = files;
+        buildUnit_ = juce::jmax(1, unit);
+        buildStride_ = juce::jmax(1, stride);
     }
 
     rebuildRequested_.store(rebuildIndex, std::memory_order_release);
@@ -55,9 +57,13 @@ void PaletteWorker::run()
 void PaletteWorker::processFiles()
 {
     std::vector<juce::File> files;
+    int unit = 1;
+    int stride = 1;
     {
         const juce::ScopedLock lock(stateMutex_);
         files = pendingFiles_;
+        unit = buildUnit_;
+        stride = buildStride_;
     }
 
     if (!backend_.ready())
@@ -85,6 +91,7 @@ void PaletteWorker::processFiles()
         index_.clear();
 
     index_.prepareForSamples(static_cast<int>(files.size()));
+    index_.setGrainConfig(unit, stride);
 
     {
         const juce::ScopedLock lock(stateMutex_);
@@ -127,16 +134,36 @@ void PaletteWorker::processFiles()
 
         index_.setTokenBlock(static_cast<int>(i), tokens);
 
-        for (int frame = 0; frame < tokens.frames; ++frame)
+        for (int frame = 0; frame + unit <= tokens.frames; frame += stride)
         {
-            const auto vectorRow = backend_.tokensToVectorRow(tokens, frame);
-            if (static_cast<int>(vectorRow.size()) == index_.dimensions())
+            std::vector<float> pooled;
+            pooled.assign(static_cast<size_t>(index_.dimensions()), 0.0f);
+
+            bool valid = true;
+            for (int offset = 0; offset < unit; ++offset)
             {
-                PaletteMeta meta;
-                meta.sampleId = static_cast<int>(i);
-                meta.frame = frame;
-                index_.add(vectorRow, meta);
+                const auto vectorRow = backend_.tokensToVectorRow(tokens, frame + offset);
+                if (static_cast<int>(vectorRow.size()) != index_.dimensions())
+                {
+                    valid = false;
+                    break;
+                }
+
+                for (int d = 0; d < index_.dimensions(); ++d)
+                    pooled[static_cast<size_t>(d)] += vectorRow[static_cast<size_t>(d)];
             }
+
+            if (!valid)
+                continue;
+
+            const float invUnit = 1.0f / static_cast<float>(juce::jmax(1, unit));
+            for (auto& value : pooled)
+                value *= invUnit;
+
+            PaletteMeta meta;
+            meta.sampleId = static_cast<int>(i);
+            meta.frame = frame;
+            index_.add(pooled, meta);
         }
 
         progress_.store(static_cast<double>(i + 1) / static_cast<double>(files.size()), std::memory_order_release);

@@ -171,6 +171,8 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
 
     setupSlider(temperatureSlider_, "Temperature");
     setupSlider(thresholdSlider_, "Threshold");
+    setupSlider(continuitySlider_, "Continuity");
+    setupSlider(rvqFocusSlider_, "RVQ Focus");
     setupSlider(unitSlider_, "Unit");
     setupSlider(strideSlider_, "Stride");
     setupSlider(similaritySlider_, "Similarity");
@@ -190,6 +192,8 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
 
     temperatureAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor_.parameters, "temperature", temperatureSlider_);
     thresholdAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor_.parameters, "threshold", thresholdSlider_);
+    continuityAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor_.parameters, "continuity", continuitySlider_);
+    rvqFocusAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor_.parameters, "rvqFocus", rvqFocusSlider_);
     unitAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor_.parameters, "unit", unitSlider_);
     strideAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor_.parameters, "stride", strideSlider_);
     similarityAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor_.parameters, "similarity", similaritySlider_);
@@ -429,15 +433,16 @@ void NeuralMorphingAudioProcessorEditor::resized()
     // Slider grid area
     juce::Rectangle<int> sliderArea(margin, currentY, bounds.getWidth() - 2 * margin, bounds.getBottom() - margin - currentY);
     const int numColumns = 4;
-    const int numRows = 2;
+    const int numRows = 3;
     const int sliderWidth = sliderArea.getWidth() / numColumns;
     const int sliderHeight = sliderArea.getHeight() / numRows;
 
     layoutDebugInfo_ << "slider:" << sliderArea.getWidth() << "x" << sliderArea.getHeight()
                     << " cell:" << sliderWidth << "x" << sliderHeight << '\n';
 
-    juce::Slider* sliders[] = { &temperatureSlider_, &thresholdSlider_, &unitSlider_, &strideSlider_,
-                                &similaritySlider_, &envelopeSlider_, &dryWetSlider_, &outputSlider_ };
+    juce::Slider* sliders[] = { &temperatureSlider_, &thresholdSlider_, &continuitySlider_, &rvqFocusSlider_,
+                                &unitSlider_, &strideSlider_, &similaritySlider_, &envelopeSlider_,
+                                &dryWetSlider_, &outputSlider_ };
 
     int lastKnobSize = 0;
 
@@ -536,7 +541,9 @@ void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
                                    lastDirectory_ = results.getFirst().getParentDirectory();
                                    if (auto* worker = processor_.getPaletteWorker())
                                    {
-                                       worker->requestBuild(lastFiles_, true);
+                                       worker->requestBuild(lastFiles_, true,
+                                                            static_cast<int>(unitSlider_.getValue()),
+                                                            static_cast<int>(strideSlider_.getValue()));
                                        processor_.invalidateMorphCache();
                                    }
                                }
@@ -548,7 +555,9 @@ void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
         lastFiles_.clear();
         if (auto* worker = processor_.getPaletteWorker())
         {
-            worker->requestBuild({}, true);
+            worker->requestBuild({}, true,
+                                 static_cast<int>(unitSlider_.getValue()),
+                                 static_cast<int>(strideSlider_.getValue()));
             processor_.invalidateMorphCache();
         }
     }
@@ -556,7 +565,9 @@ void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
     {
         if (auto* worker = processor_.getPaletteWorker())
         {
-            worker->requestBuild(lastFiles_, true);
+            worker->requestBuild(lastFiles_, true,
+                                 static_cast<int>(unitSlider_.getValue()),
+                                 static_cast<int>(strideSlider_.getValue()));
             processor_.invalidateMorphCache();
         }
     }

@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "JuceHeader.h"
+#include <algorithm>
 #include <cmath>
 #if NM_HAS_ONNX
 #include "ModelBackendOnnx.h"
@@ -12,6 +13,59 @@
 namespace
 {
 constexpr int monoScratchReserve = 8192;
+constexpr int matchCandidateCount = 96;
+constexpr int matchBeamWidth = 12;
+constexpr int topKMixCount = 4;
+
+struct RvqGroups
+{
+    int q0 = 0;
+    int q1 = 0;
+    int codebooks = 0;
+    int dimsPerCodebook = 0;
+};
+
+RvqGroups makeRvqGroups(int codebooks, int embeddingDim)
+{
+    RvqGroups groups;
+    groups.codebooks = codebooks;
+
+    if (codebooks <= 0 || embeddingDim <= 0 || embeddingDim % codebooks != 0)
+    {
+        groups.q0 = codebooks;
+        groups.q1 = codebooks;
+        groups.dimsPerCodebook = 0;
+        return groups;
+    }
+
+    groups.dimsPerCodebook = embeddingDim / codebooks;
+    groups.q0 = std::max(1, codebooks / 3);
+    groups.q1 = std::max(groups.q0 + 1, (2 * codebooks) / 3);
+    groups.q1 = std::min(groups.q1, codebooks);
+    return groups;
+}
+
+float cosineDistanceSlice(const std::vector<float>& a, const std::vector<float>& b, int start, int length)
+{
+    if (length <= 0)
+        return 0.0f;
+
+    float dot = 0.0f;
+    float normA = 0.0f;
+    float normB = 0.0f;
+
+    for (int i = 0; i < length; ++i)
+    {
+        const float va = a[static_cast<size_t>(start + i)];
+        const float vb = b[static_cast<size_t>(start + i)];
+        dot += va * vb;
+        normA += va * va;
+        normB += vb * vb;
+    }
+
+    const float denom = std::sqrt(normA) * std::sqrt(normB) + 1.0e-9f;
+    return 1.0f - dot / denom;
+}
 }
 
 NeuralMorphingAudioProcessor::NeuralMorphingAudioProcessor()
@@ -108,6 +162,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
             if (isSilent(monoScratch_))
                 targetSegments_.clear();
             resetMorphSmoothing();
+            lastMatchedIndex_ = -1;
         }
         else
         {
@@ -121,7 +176,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
 
                     targetSegments_.push_back(targetTokens);
 
-                    const uint64_t cacheKey = hashTokenBlock(targetTokens);
+                    const uint64_t cacheKey = hashMorphKey(targetTokens);
                     juce::AudioBuffer<float> cachedAudio;
                     bool hasCachedAudio = false;
                     {
@@ -177,6 +232,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
             {
                 targetSegments_.clear();
                 resetMorphSmoothing();
+                lastMatchedIndex_ = -1;
             }
         }
     }
@@ -251,6 +307,7 @@ void NeuralMorphingAudioProcessor::invalidateMorphCache()
 {
     const juce::SpinLock::ScopedLockType lock(morphCacheMutex_);
     morphCache_.clear();
+    lastMatchedIndex_ = -1;
     resetSmoothingPending_.store(true, std::memory_order_release);
 }
 
@@ -316,6 +373,27 @@ uint64_t NeuralMorphingAudioProcessor::hashTokenBlock(const TokenBlock& block) c
     return hash;
 }
 
+uint64_t NeuralMorphingAudioProcessor::hashMorphKey(const TokenBlock& block) const
+{
+    uint64_t hash = hashTokenBlock(block);
+
+    auto mix = [&](uint64_t value)
+    {
+        constexpr uint64_t fnvPrime = 1099511628211ULL;
+        hash ^= value;
+        hash *= fnvPrime;
+    };
+
+    mix(static_cast<uint64_t>(getParam("unit")));
+    mix(static_cast<uint64_t>(getParam("stride")));
+    mix(static_cast<uint64_t>(std::lround(getParam("temperature") * 1000.0f)));
+    mix(static_cast<uint64_t>(std::lround(getParam("threshold") * 1000.0f)));
+    mix(static_cast<uint64_t>(std::lround(getParam("continuity") * 1000.0f)));
+    mix(static_cast<uint64_t>(std::lround(getParam("rvqFocus") * 1000.0f)));
+
+    return hash;
+}
+
 juce::AudioProcessorValueTreeState::ParameterLayout NeuralMorphingAudioProcessor::createParameterLayout()
 {
     using R = juce::NormalisableRange<float>;
@@ -323,6 +401,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralMorphingAudioProcessor
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>("temperature", "Temperature", R(0.1f, 2.0f, 0.01f), 1.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("threshold", "Threshold", R(0.1f, 2.0f, 0.01f), 1.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("continuity", "Continuity", R(0.0f, 1.0f, 0.01f), 0.3f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("rvqFocus", "RVQ Focus", R(0.0f, 1.0f, 0.01f), 0.5f));
     params.push_back(std::make_unique<juce::AudioParameterInt>("unit", "Unit", 1, 10, 2));
     params.push_back(std::make_unique<juce::AudioParameterInt>("stride", "Stride", 1, 10, 2));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("similarity", "Similarity", R(0.0f, 1.0f, 0.01f), 0.8f));
@@ -355,67 +435,384 @@ TokenBlock NeuralMorphingAudioProcessor::buildMatchedTokenBlock(const TokenBlock
 {
     TokenBlock result;
 
-    if (!paletteReady())
+    if (!paletteReady() || backend_ == nullptr)
         return result;
 
-    result.batchSize = targetBlock.batchSize;
-    result.codebooks = targetBlock.codebooks;
-    result.frames = targetBlock.frames;
-    result.tokens.resize(static_cast<std::size_t>(result.codebooks * result.frames));
+    if (targetBlock.tokens.empty() || targetBlock.frames <= 0)
+        return result;
 
-    for (int frame = 0; frame < targetBlock.frames; ++frame)
+    result = targetBlock;
+
+    const int unit = juce::jmax(1, static_cast<int>(getParam("unit")));
+    const int stride = juce::jmax(1, static_cast<int>(getParam("stride")));
+
+    if (targetBlock.frames < unit)
+        return result;
+
+    const int codebooks = targetBlock.codebooks;
+    const int embeddingDim = backend_->embeddingDimension();
+    RvqGroups groups = makeRvqGroups(codebooks, embeddingDim);
+
+    int coarseLen = groups.q0 * groups.dimsPerCodebook;
+    int midLen = (groups.q1 - groups.q0) * groups.dimsPerCodebook;
+    int fineLen = (groups.codebooks - groups.q1) * groups.dimsPerCodebook;
+
+    if (groups.dimsPerCodebook <= 0)
     {
-        auto targetVector = backend_->tokensToVectorRow(targetBlock, frame);
-        if (targetVector.empty())
+        coarseLen = embeddingDim;
+        midLen = 0;
+        fineLen = 0;
+        groups.q0 = codebooks;
+        groups.q1 = codebooks;
+    }
+
+    float rvqFocus = juce::jlimit(0.0f, 1.0f, getParam("rvqFocus"));
+    float weightCoarse = 1.0f - rvqFocus;
+    float weightFine = rvqFocus;
+    float weightMid = 0.5f * (weightCoarse + weightFine);
+    if (coarseLen == 0)
+        weightCoarse = 0.0f;
+    if (midLen == 0)
+        weightMid = 0.0f;
+    if (fineLen == 0)
+        weightFine = 0.0f;
+
+    const float weightSum = weightCoarse + weightMid + weightFine;
+    if (weightSum > 0.0f)
+    {
+        weightCoarse /= weightSum;
+        weightMid /= weightSum;
+        weightFine /= weightSum;
+    }
+
+    const float threshold = getParam("threshold");
+    const float temperature = juce::jmax(1.0e-4f, getParam("temperature"));
+    const float continuity = juce::jlimit(0.0f, 1.0f, getParam("continuity"));
+
+    const int candidateCount = std::min(matchCandidateCount, paletteIndex_->size());
+    if (candidateCount <= 0)
+        return result;
+
+    const int beamWidth = std::min(matchBeamWidth, candidateCount);
+
+    struct CandidateInfo
+    {
+        int annIndex = -1;
+        float emission = 0.0f;
+        float fineDistance = 0.0f;
+    };
+
+    struct GrainMatch
+    {
+        int startFrame = 0;
+        std::vector<CandidateInfo> candidates;
+    };
+
+    std::vector<GrainMatch> grains;
+    grains.reserve(static_cast<size_t>((targetBlock.frames - unit) / stride + 1));
+
+    std::vector<float> queryVector;
+    queryVector.reserve(static_cast<size_t>(embeddingDim));
+
+    auto computeDescriptor = [&](int startFrame, std::vector<float>& out) -> bool
+    {
+        out.assign(static_cast<size_t>(embeddingDim), 0.0f);
+        for (int offset = 0; offset < unit; ++offset)
         {
-            for (int cb = 0; cb < result.codebooks; ++cb)
-            {
-                const int idx = targetBlock.index(cb, frame);
-                result.tokens[static_cast<std::size_t>(result.index(cb, frame))] =
-                    (idx >= 0 && static_cast<std::size_t>(idx) < targetBlock.tokens.size())
-                        ? targetBlock.tokens[static_cast<std::size_t>(idx)]
-                        : 0;
-            }
-            continue;
+            auto row = backend_->tokensToVectorRow(targetBlock, startFrame + offset);
+            if (static_cast<int>(row.size()) != embeddingDim)
+                return false;
+
+            for (int d = 0; d < embeddingDim; ++d)
+                out[static_cast<size_t>(d)] += row[static_cast<size_t>(d)];
         }
 
-        auto matches = paletteIndex_->query(targetVector, 1);
+        const float invUnit = 1.0f / static_cast<float>(unit);
+        for (auto& value : out)
+            value *= invUnit;
+
+        return true;
+    };
+
+    for (int startFrame = 0; startFrame + unit <= targetBlock.frames; startFrame += stride)
+    {
+        if (!computeDescriptor(startFrame, queryVector))
+            continue;
+
+        auto matches = paletteIndex_->query(queryVector, candidateCount);
         if (matches.empty())
-        {
-            for (int cb = 0; cb < result.codebooks; ++cb)
-            {
-                const int idx = targetBlock.index(cb, frame);
-                result.tokens[static_cast<std::size_t>(result.index(cb, frame))] =
-                    (idx >= 0 && static_cast<std::size_t>(idx) < targetBlock.tokens.size())
-                        ? targetBlock.tokens[static_cast<std::size_t>(idx)]
-                        : 0;
-            }
             continue;
+
+        GrainMatch grain;
+        grain.startFrame = startFrame;
+        grain.candidates.reserve(matches.size());
+
+        for (const auto& match : matches)
+        {
+            std::vector<float> candidateVector;
+            if (!paletteIndex_->getVector(match.annIndex, candidateVector))
+                continue;
+            if (static_cast<int>(candidateVector.size()) != embeddingDim)
+                continue;
+
+            const float distCoarse = (coarseLen > 0) ? cosineDistanceSlice(queryVector, candidateVector, 0, coarseLen) : 0.0f;
+            const float distMid = (midLen > 0) ? cosineDistanceSlice(queryVector, candidateVector, coarseLen, midLen) : 0.0f;
+            const float distFine = (fineLen > 0) ? cosineDistanceSlice(queryVector, candidateVector, coarseLen + midLen, fineLen) : 0.0f;
+            const float emission = weightCoarse * distCoarse + weightMid * distMid + weightFine * distFine;
+            const float fineDistance = (fineLen > 0) ? distFine : emission;
+
+            grain.candidates.push_back({ match.annIndex, emission, fineDistance });
         }
 
-        const auto& best = matches.front();
-        const auto& bestMeta = paletteIndex_->meta(best.annIndex);
-        const TokenBlock* sourceBlock = paletteIndex_->tokensForMeta(bestMeta);
+        if (grain.candidates.empty())
+            continue;
 
-        for (int cb = 0; cb < result.codebooks; ++cb)
+        std::sort(grain.candidates.begin(), grain.candidates.end(),
+                  [](const CandidateInfo& a, const CandidateInfo& b) { return a.emission < b.emission; });
+
+        grains.push_back(std::move(grain));
+    }
+
+    if (grains.empty())
+        return result;
+
+    auto transitionCost = [&](int prevIndex, int nextIndex) -> float
+    {
+        const auto& prevMeta = paletteIndex_->meta(prevIndex);
+        const auto& nextMeta = paletteIndex_->meta(nextIndex);
+        float metaPenalty = 0.0f;
+        if (prevMeta.sampleId != nextMeta.sampleId)
         {
-            const int destIdx = result.index(cb, frame);
+            metaPenalty = 1.0f;
+        }
+        else
+        {
+            const int frameDelta = std::abs(nextMeta.frame - prevMeta.frame);
+            if (frameDelta > stride)
+                metaPenalty = std::min(1.0f, static_cast<float>(frameDelta - stride) / static_cast<float>(unit * 4));
+        }
 
-            int tokenValue = 0;
-            if (sourceBlock != nullptr && bestMeta.frame < sourceBlock->frames)
+        const float latentPenalty = paletteIndex_->cosineDistance(prevIndex, nextIndex);
+        return latentPenalty + metaPenalty;
+    };
+
+    struct BeamState
+    {
+        float score = 0.0f;
+        int candidateIdx = -1;
+        int back = -1;
+    };
+
+    std::vector<std::vector<BeamState>> beamHistory;
+    beamHistory.reserve(grains.size());
+
+    std::vector<BeamState> beam;
+    beam.reserve(grains.front().candidates.size());
+
+    for (size_t i = 0; i < grains.front().candidates.size(); ++i)
+    {
+        const auto& candidate = grains.front().candidates[i];
+        float score = candidate.emission;
+        if (continuity > 0.0f && lastMatchedIndex_ >= 0)
+            score += continuity * transitionCost(lastMatchedIndex_, candidate.annIndex);
+        beam.push_back({ score, static_cast<int>(i), -1 });
+    }
+
+    if (static_cast<int>(beam.size()) > beamWidth)
+    {
+        std::partial_sort(beam.begin(), beam.begin() + beamWidth, beam.end(),
+                          [](const BeamState& a, const BeamState& b) { return a.score < b.score; });
+        beam.resize(static_cast<size_t>(beamWidth));
+    }
+    beamHistory.push_back(beam);
+
+    for (size_t g = 1; g < grains.size(); ++g)
+    {
+        const auto& prevGrain = grains[g - 1];
+        const auto& grain = grains[g];
+        std::vector<BeamState> nextBeam;
+        nextBeam.reserve(beamHistory.back().size() * grain.candidates.size());
+
+        for (size_t prevIdx = 0; prevIdx < beamHistory.back().size(); ++prevIdx)
+        {
+            const auto& prevState = beamHistory.back()[prevIdx];
+            const int prevAnn = prevGrain.candidates[static_cast<size_t>(prevState.candidateIdx)].annIndex;
+
+            for (size_t candIdx = 0; candIdx < grain.candidates.size(); ++candIdx)
             {
-                const int srcIdx = sourceBlock->index(cb, bestMeta.frame);
-                if (srcIdx >= 0 && static_cast<std::size_t>(srcIdx) < sourceBlock->tokens.size())
-                    tokenValue = sourceBlock->tokens[static_cast<std::size_t>(srcIdx)];
+                const auto& candidate = grain.candidates[candIdx];
+                float score = prevState.score + candidate.emission;
+                if (continuity > 0.0f)
+                    score += continuity * transitionCost(prevAnn, candidate.annIndex);
+                nextBeam.push_back({ score, static_cast<int>(candIdx), static_cast<int>(prevIdx) });
             }
-            else
+        }
+
+        if (static_cast<int>(nextBeam.size()) > beamWidth)
+        {
+            std::partial_sort(nextBeam.begin(), nextBeam.begin() + beamWidth, nextBeam.end(),
+                              [](const BeamState& a, const BeamState& b) { return a.score < b.score; });
+            nextBeam.resize(static_cast<size_t>(beamWidth));
+        }
+
+        beamHistory.push_back(std::move(nextBeam));
+    }
+
+    std::vector<int> path(grains.size(), 0);
+    if (!beamHistory.empty() && !beamHistory.back().empty())
+    {
+        int bestIdx = 0;
+        for (size_t i = 1; i < beamHistory.back().size(); ++i)
+        {
+            if (beamHistory.back()[i].score < beamHistory.back()[static_cast<size_t>(bestIdx)].score)
+                bestIdx = static_cast<int>(i);
+        }
+
+        for (int g = static_cast<int>(grains.size()) - 1; g >= 0; --g)
+        {
+            const auto& state = beamHistory[static_cast<size_t>(g)][static_cast<size_t>(bestIdx)];
+            path[static_cast<size_t>(g)] = state.candidateIdx;
+            bestIdx = state.back;
+            if (bestIdx < 0)
+                break;
+        }
+    }
+
+    for (size_t g = 0; g < grains.size(); ++g)
+    {
+        auto& grain = grains[g];
+        const int candidateIdx = path[g];
+        if (candidateIdx < 0 || static_cast<size_t>(candidateIdx) >= grain.candidates.size())
+            continue;
+
+        const auto& best = grain.candidates[static_cast<size_t>(candidateIdx)];
+        lastMatchedIndex_ = best.annIndex;
+        const bool fallbackCoarse = best.emission > threshold;
+
+        const int startFrame = grain.startFrame;
+        const int span = juce::jmin(unit, result.frames - startFrame);
+        if (span <= 0)
+            continue;
+
+        const int kCount = std::min(topKMixCount, static_cast<int>(grain.candidates.size()));
+        std::vector<int> topIndices;
+        std::vector<float> topDistances;
+        topIndices.reserve(static_cast<size_t>(kCount));
+        topDistances.reserve(static_cast<size_t>(kCount));
+
+        for (int i = 0; i < kCount; ++i)
+        {
+            topIndices.push_back(grain.candidates[static_cast<size_t>(i)].annIndex);
+            topDistances.push_back(grain.candidates[static_cast<size_t>(i)].fineDistance);
+        }
+
+        std::vector<float> weights;
+        weights.resize(static_cast<size_t>(kCount), 1.0f / static_cast<float>(juce::jmax(1, kCount)));
+
+        if (kCount > 1)
+        {
+            float maxLogit = -topDistances[0] / temperature;
+            for (int i = 1; i < kCount; ++i)
+                maxLogit = std::max(maxLogit, -topDistances[static_cast<size_t>(i)] / temperature);
+
+            float sum = 0.0f;
+            for (int i = 0; i < kCount; ++i)
             {
-                const int fallbackIdx = targetBlock.index(cb, frame);
-                if (fallbackIdx >= 0 && static_cast<std::size_t>(fallbackIdx) < targetBlock.tokens.size())
-                    tokenValue = targetBlock.tokens[static_cast<std::size_t>(fallbackIdx)];
+                const float logit = -topDistances[static_cast<size_t>(i)] / temperature;
+                const float value = std::exp(logit - maxLogit);
+                weights[static_cast<size_t>(i)] = value;
+                sum += value;
             }
 
-            result.tokens[static_cast<std::size_t>(destIdx)] = tokenValue;
+            if (sum > 0.0f)
+            {
+                for (auto& w : weights)
+                    w /= sum;
+            }
+        }
+
+        const auto& bestMeta = paletteIndex_->meta(best.annIndex);
+        const TokenBlock* bestBlock = paletteIndex_->tokensForMeta(bestMeta);
+
+        for (int q = 0; q < codebooks; ++q)
+        {
+            const bool isCoarse = q < groups.q0;
+            const bool isMid = q >= groups.q0 && q < groups.q1;
+            const bool isFine = q >= groups.q1;
+            if (isCoarse && fallbackCoarse)
+                continue;
+
+            if (isFine)
+            {
+                for (int offset = 0; offset < span; ++offset)
+                {
+                    std::vector<int> codes;
+                    codes.reserve(static_cast<size_t>(kCount));
+
+                    for (int i = 0; i < kCount; ++i)
+                    {
+                        const auto& meta = paletteIndex_->meta(topIndices[static_cast<size_t>(i)]);
+                        const TokenBlock* block = paletteIndex_->tokensForMeta(meta);
+                        int tokenValue = 0;
+                        if (block != nullptr && meta.frame + offset < block->frames)
+                        {
+                            const int idx = block->index(q, meta.frame + offset);
+                            if (idx >= 0 && static_cast<size_t>(idx) < block->tokens.size())
+                                tokenValue = block->tokens[static_cast<size_t>(idx)];
+                        }
+                        else
+                        {
+                            const int fallbackIdx = targetBlock.index(q, startFrame + offset);
+                            if (fallbackIdx >= 0 && static_cast<size_t>(fallbackIdx) < targetBlock.tokens.size())
+                                tokenValue = targetBlock.tokens[static_cast<size_t>(fallbackIdx)];
+                        }
+                        codes.push_back(tokenValue);
+                    }
+
+                    int bestCode = codes.front();
+                    float bestScore = -1.0f;
+                    for (int i = 0; i < kCount; ++i)
+                    {
+                        float score = 0.0f;
+                        for (int j = 0; j < kCount; ++j)
+                        {
+                            if (codes[static_cast<size_t>(j)] == codes[static_cast<size_t>(i)])
+                                score += weights[static_cast<size_t>(j)];
+                        }
+
+                        if (score > bestScore)
+                        {
+                            bestScore = score;
+                            bestCode = codes[static_cast<size_t>(i)];
+                        }
+                    }
+
+                    result.tokens[static_cast<size_t>(result.index(q, startFrame + offset))] = bestCode;
+                }
+                continue;
+            }
+
+            if (!isCoarse && !isMid)
+                continue;
+
+            for (int offset = 0; offset < span; ++offset)
+            {
+                int tokenValue = 0;
+                if (bestBlock != nullptr && bestMeta.frame + offset < bestBlock->frames)
+                {
+                    const int srcIdx = bestBlock->index(q, bestMeta.frame + offset);
+                    if (srcIdx >= 0 && static_cast<size_t>(srcIdx) < bestBlock->tokens.size())
+                        tokenValue = bestBlock->tokens[static_cast<size_t>(srcIdx)];
+                }
+                else
+                {
+                    const int fallbackIdx = targetBlock.index(q, startFrame + offset);
+                    if (fallbackIdx >= 0 && static_cast<size_t>(fallbackIdx) < targetBlock.tokens.size())
+                        tokenValue = targetBlock.tokens[static_cast<size_t>(fallbackIdx)];
+                }
+
+                result.tokens[static_cast<size_t>(result.index(q, startFrame + offset))] = tokenValue;
+            }
         }
     }
 
@@ -489,7 +886,13 @@ bool NeuralMorphingAudioProcessor::paletteReady() const
     if (paletteIndex_ == nullptr)
         return false;
 
-    return paletteIndex_->size() > 0;
+    if (paletteIndex_->size() <= 0)
+        return false;
+
+    const auto config = paletteIndex_->grainConfig();
+    const int unit = juce::jmax(1, static_cast<int>(getParam("unit")));
+    const int stride = juce::jmax(1, static_cast<int>(getParam("stride")));
+    return config.unit == unit && config.stride == stride;
 }
 
 bool NeuralMorphingAudioProcessor::isSilent(const juce::AudioBuffer<float>& buffer) const

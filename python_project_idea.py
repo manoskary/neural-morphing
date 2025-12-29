@@ -1,9 +1,9 @@
 """
-Latent Granular Synthesis with DAC (Descript Audio Codec)
-========================================================
-creates a "granular codebook" by encoding a source audio corpus
-into latent vector segments, then matches each latent grain of a
-target audio signal to its closest counterpart in the codebook.
+RVQ-Aware Latent Granular Morphing with DAC
+===========================================
+Builds a palette of DAC code grains, matches target grains with
+RVQ-aware descriptors, enforces temporal continuity, and applies
+Top-K mixing for finer layers.
 """
 
 import contextlib
@@ -19,8 +19,15 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from transformers import AutoProcessor, DacModel
 
+
 class LatentGranularSynthesis:
-    def __init__(self, model_name="descript/dac_44khz", device=None, chunk_duration_s=8.0, match_batch=2048):
+    def __init__(
+        self,
+        model_name="descript/dac_44khz",
+        device=None,
+        chunk_duration_s=8.0,
+        match_batch=2048,
+    ):
         """Initialize with DAC model from HuggingFace."""
         preferred_device = device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
         self.device = torch.device(preferred_device)
@@ -33,7 +40,6 @@ class LatentGranularSynthesis:
         self.model.eval()
         self.processor = AutoProcessor.from_pretrained(model_name)
 
-        # Get sampling rate from processor
         self.sample_rate = self.processor.sampling_rate
         print(f"Using DAC model: {model_name}")
         print(f"Sample rate: {self.sample_rate} Hz")
@@ -41,17 +47,27 @@ class LatentGranularSynthesis:
 
         self.unit = 2
         self.stride = 2
-        self.temperature = 0.01
+        self.temperature = 0.5
         self.threshold = 1.0
+        self.continuity = 0.3
+        self.rvq_focus = 0.5
+        self.top_k = 4
+        self.candidate_count = 96
+        self.beam_width = 12
+
         self.files = None
+        self.last_aug = False
         self.pitch_aug = [-5, -2, 2, 5]
         self.vol_aug = [0.3, 0.7]
 
-        self.codedb_segments = []
-        self.codedb = None
-        self.db = None
-        self.db_flat = None
-        self.db_flat_device = None
+        self.codebook_embeddings = None
+        self.rvq_groups = None
+        self.palette_codes = None
+        self.palette_desc_groups = None
+        self.palette_desc_full = None
+        self.palette_file_ids = None
+        self.palette_frame_indices = None
+        self.prev_best_index = None
 
     @staticmethod
     def _resolve_file_entry(entry):
@@ -126,25 +142,123 @@ class LatentGranularSynthesis:
         quantized_representation = encoder_outputs.quantized_representation.detach().to("cpu", dtype=torch.float32)
 
         return audio_codes, quantized_representation
-    
-    def decode(self, quantized_representation):
-        """Decode quantized representation back to audio using DAC."""
-        if quantized_representation is None:
+
+    def decode(self, audio_codes=None, quantized_representation=None):
+        """Decode DAC tokens or quantized representation back to audio."""
+        if audio_codes is None and quantized_representation is None:
             return None
 
         target_dtype = self.compute_dtype if self.device.type == "cuda" else torch.float32
-        quantized_representation = quantized_representation.to(self.device, dtype=target_dtype)
 
         with torch.no_grad():
             with self._autocast_context():
-                audio_values = self.model.decode(quantized_representation)
+                if audio_codes is not None:
+                    tokens = audio_codes.to(self.device, dtype=torch.int64)
+                    return self.model.decode(audio_codes=tokens)
 
-        return audio_values
-    
+                quantized_representation = quantized_representation.to(self.device, dtype=target_dtype)
+                return self.model.decode(quantized_representation)
+
     def _autocast_context(self):
         if self.device.type == "cuda":
             return torch.autocast(device_type="cuda", dtype=self.compute_dtype)
         return contextlib.nullcontext()
+
+    def _init_rvq_groups(self, num_codebooks):
+        if num_codebooks <= 1:
+            self.rvq_groups = [list(range(num_codebooks)), [], []]
+            return
+
+        q0 = max(1, num_codebooks // 3)
+        q1 = max(q0 + 1, (2 * num_codebooks) // 3)
+        q1 = min(q1, num_codebooks)
+
+        self.rvq_groups = [
+            list(range(0, q0)),
+            list(range(q0, q1)),
+            list(range(q1, num_codebooks)),
+        ]
+
+    def _load_codebook_embeddings(self):
+        quantizer = getattr(self.model, "quantizer", None)
+        if quantizer is None:
+            return None
+
+        if hasattr(quantizer, "codebooks"):
+            embeddings = []
+            for book in list(quantizer.codebooks):
+                weight = book.weight if hasattr(book, "weight") else book
+                embeddings.append(weight.detach().cpu().to(torch.float32))
+            return embeddings
+
+        if hasattr(quantizer, "quantizers"):
+            embeddings = []
+            for book in quantizer.quantizers:
+                table = getattr(book, "codebook", None) or getattr(book, "embedding", None) or getattr(book, "embeddings", None)
+                if table is None:
+                    return None
+                weight = table.weight if hasattr(table, "weight") else table
+                embeddings.append(weight.detach().cpu().to(torch.float32))
+            return embeddings
+
+        if hasattr(quantizer, "embeddings"):
+            weight = quantizer.embeddings
+            weight = weight.weight if hasattr(weight, "weight") else weight
+            if isinstance(weight, torch.Tensor) and weight.ndim == 3:
+                return [weight[i].detach().cpu().to(torch.float32) for i in range(weight.shape[0])]
+
+        return None
+
+    def _ensure_rvq_setup(self, audio_codes):
+        if audio_codes is None:
+            return
+
+        if self.rvq_groups is None:
+            self._init_rvq_groups(audio_codes.shape[1])
+
+        if self.codebook_embeddings is None:
+            self.codebook_embeddings = self._load_codebook_embeddings()
+
+    def _group_weights(self):
+        focus = float(np.clip(self.rvq_focus, 0.0, 1.0))
+        coarse = 1.0 - focus
+        fine = focus
+        mid = 0.5 * (coarse + fine)
+
+        weights = np.array([coarse, mid, fine], dtype=np.float32)
+        weight_sum = weights.sum()
+        if weight_sum > 0.0:
+            weights /= weight_sum
+        return weights
+
+    def _normalize(self, vec):
+        if vec.numel() == 0:
+            return vec
+        return torch.nan_to_num(F.normalize(vec, dim=0), nan=0.0, posinf=0.0, neginf=0.0)
+
+    def _descriptors_for_codes(self, codes):
+        if self.codebook_embeddings is None:
+            token_means = codes.to(torch.float32).mean(dim=1)
+            full_desc = self._normalize(token_means.flatten())
+            return full_desc, [full_desc, torch.empty(0), torch.empty(0)]
+
+        codebook_vecs = []
+        for q, emb in enumerate(self.codebook_embeddings):
+            tokens = codes[q].to(torch.long)
+            vec = emb[tokens].mean(dim=0)
+            codebook_vecs.append(vec)
+
+        full_desc = self._normalize(torch.cat(codebook_vecs, dim=0))
+
+        group_descs = []
+        for group in self.rvq_groups:
+            if not group:
+                group_descs.append(torch.empty(0))
+                continue
+            stacked = torch.cat([codebook_vecs[q] for q in group], dim=0)
+            group_descs.append(self._normalize(stacked))
+
+        return full_desc, group_descs
 
     def _stream_audio(self, path):
         """Yield normalized mono chunks from disk to keep memory usage low."""
@@ -176,104 +290,102 @@ class LatentGranularSynthesis:
             print(f"Failed streaming {path}: {exc}")
 
     def _ingest_audio_segment(self, segment):
-        """Encode a segment and append it to the codebook cache."""
         if segment is None:
-            return False
+            return None
 
         segment = np.asarray(segment, dtype=np.float32)
         if segment.ndim > 1:
             segment = librosa.to_mono(segment)
 
         if segment.size == 0:
-            return False
+            return None
 
-        _, quantized = self.encode(segment)
-        if quantized is None or quantized.shape[-1] < self.unit:
-            return False
+        audio_codes, _ = self.encode(segment)
+        if audio_codes is None or audio_codes.shape[-1] < self.unit:
+            return None
 
-        self.codedb_segments.append(quantized.contiguous())
-        return True
+        return audio_codes
 
-    def _finalize_codebook(self):
-        """Finalize tensor views used for matching."""
-        if not self.codedb_segments:
-            self.codedb = None
-            self.db = None
-            self.db_flat = None
-            self.db_flat_device = None
+    def _add_palette_from_codes(self, audio_codes, file_id):
+        if audio_codes is None or audio_codes.shape[-1] < self.unit:
+            return 0
+
+        self._ensure_rvq_setup(audio_codes)
+
+        codes = audio_codes.squeeze(0)
+        segments = codes.unfold(-1, self.unit, self.stride)
+        if segments.numel() == 0:
+            return 0
+
+        segments = segments.permute(1, 0, 2).contiguous()
+        added = 0
+
+        for idx in range(segments.shape[0]):
+            grain_codes = segments[idx]
+            full_desc, group_descs = self._descriptors_for_codes(grain_codes)
+
+            self._palette_codes_list.append(grain_codes.to(torch.int16))
+            self._palette_full_desc_list.append(full_desc.to(torch.float32))
+            for g, desc in enumerate(group_descs):
+                self._palette_group_desc_lists[g].append(desc.to(torch.float32))
+            self._palette_file_ids_list.append(file_id)
+            self._palette_frame_indices_list.append(idx * self.stride)
+            added += 1
+
+        return added
+
+    def _prepare_palette_tensors(self):
+        if not self._palette_codes_list:
+            self.palette_codes = None
+            self.palette_desc_full = None
+            self.palette_desc_groups = None
+            self.palette_file_ids = None
+            self.palette_frame_indices = None
             return
 
-        self.codedb = torch.cat(self.codedb_segments, dim=-1)
+        self.palette_codes = torch.stack(self._palette_codes_list, dim=0).to(torch.int16)
+        self.palette_desc_full = self._normalize(torch.stack(self._palette_full_desc_list, dim=0))
 
-        segment_views = []
-        for chunk in self.codedb_segments:
-            # chunk shape: (batch, features, frames)
-            unfolded = chunk.unfold(-1, self.unit, self.stride)
-            if unfolded.numel() == 0:
-                continue
-            # -> (batch, features, segments, unit)
-            unfolded = unfolded.squeeze(0).permute(1, 0, 2).contiguous()
-            segment_views.append(unfolded)
+        group_descs = []
+        for group_list in self._palette_group_desc_lists:
+            if group_list:
+                group_descs.append(self._normalize(torch.stack(group_list, dim=0)))
+            else:
+                group_descs.append(torch.empty((self.palette_codes.shape[0], 0)))
+        self.palette_desc_groups = group_descs
 
-        if not segment_views:
-            self.db = torch.empty(0, dtype=torch.float32)
-            self.db_flat = torch.empty(0, dtype=torch.float32)
-            self.db_flat_device = None
-            return
+        self.palette_file_ids = np.asarray(self._palette_file_ids_list, dtype=np.int32)
+        self.palette_frame_indices = np.asarray(self._palette_frame_indices_list, dtype=np.int64)
 
-        self.db = torch.cat(segment_views, dim=0).to(torch.float32)
-        self.db_flat = self.db.reshape(self.db.shape[0], -1).contiguous()
-        if self.db_flat.numel() > 0:
-            self.db_flat = torch.nan_to_num(F.normalize(self.db_flat, dim=1), nan=0.0, posinf=0.0, neginf=0.0)
-        self._prepare_match_tensors()
-
-    def _prepare_match_tensors(self):
-        self.db_flat_device = None
-        if self.device.type != "cuda" or self.db_flat is None:
-            return
-        try:
-            self.db_flat_device = self.db_flat.to(self.device)
-        except RuntimeError:
-            # Not enough GPU memory; fall back to CPU matching.
-            self.db_flat_device = None
-            torch.cuda.empty_cache()
-            print("Warning: codebook is too large to keep on the GPU. Falling back to CPU matching.")
-
-    def _compute_distances(self, target_code):
-        if self.db_flat is None or self.db_flat.numel() == 0:
-            return torch.empty(0)
-
-        target_vec = target_code.reshape(-1).to(torch.float32)
-        target_vec = torch.nan_to_num(F.normalize(target_vec, dim=0), nan=0.0, posinf=0.0, neginf=0.0)
+    def _group_distances(self, target_group_descs):
         distances = []
+        if self.palette_desc_groups is None:
+            return distances
 
-        if self.db_flat_device is not None:
-            target_vec = target_vec.to(self.db_flat_device.dtype).to(self.device)
-            for start in range(0, self.db_flat_device.shape[0], self.match_batch):
-                chunk = self.db_flat_device[start:start + self.match_batch]
-                sims = torch.matmul(chunk, target_vec)
-                distances.append((1 - sims).cpu())
-        else:
-            target_vec = target_vec.to(self.db_flat.dtype)
-            for start in range(0, self.db_flat.shape[0], self.match_batch):
-                chunk = self.db_flat[start:start + self.match_batch]
-                sims = torch.matmul(chunk, target_vec)
-                distances.append(1 - sims)
-
-        if not distances:
-            return torch.empty(0)
-
-        return torch.cat(distances, dim=0)
+        for group_idx, target_desc in enumerate(target_group_descs):
+            if target_desc.numel() == 0:
+                distances.append(torch.zeros(self.palette_desc_groups[group_idx].shape[0]))
+                continue
+            target_desc = self._normalize(target_desc.to(torch.float32))
+            palette_desc = self.palette_desc_groups[group_idx]
+            dot = torch.matmul(palette_desc, target_desc)
+            distances.append(1.0 - dot)
+        return distances
 
     def set_temperature(self, temperature, threshold):
-        self.temperature = temperature * 0.01
-        self.threshold = threshold
+        self.temperature = float(temperature)
+        self.threshold = float(threshold)
 
     def set_unit(self, unit, stride):
         self.unit = max(int(unit), 1)
         self.stride = max(int(stride), 1)
-        if self.codedb_segments:
-            self._finalize_codebook()
+
+    def set_matching(self, continuity, rvq_focus):
+        self.continuity = float(continuity)
+        self.rvq_focus = float(rvq_focus)
+
+    def set_topk(self, top_k):
+        self.top_k = max(int(top_k), 1)
 
     def build_dataset(self, files, aug_checkbox: bool):
         resolved_files = self._materialize_files(files)
@@ -281,115 +393,241 @@ class LatentGranularSynthesis:
             return {"message": "Please upload at least one audio file before building the palette."}
 
         self.files = resolved_files
-        self.codedb_segments = []
-        self.codedb = None
-        self.db = None
-        self.db_flat = None
-        self.db_flat_device = None
+        self.last_aug = bool(aug_checkbox)
+        self.prev_best_index = None
+        self._palette_codes_list = []
+        self._palette_full_desc_list = []
+        self._palette_group_desc_lists = [[], [], []]
+        self._palette_file_ids_list = []
+        self._palette_frame_indices_list = []
 
         n_files = 0
+        total_grains = 0
 
-        for path in resolved_files:
-            processed_any = False
+        for file_id, path in enumerate(resolved_files):
+            file_segments = []
             path_str = str(path)
+
             try:
                 if aug_checkbox:
                     y, _ = librosa.load(path_str, sr=self.sample_rate, mono=True)
                     y = librosa.util.normalize(y.astype(np.float32, copy=False))
-                    processed_any |= self._ingest_audio_segment(y)
+                    base_codes = self._ingest_audio_segment(y)
+                    if base_codes is not None:
+                        file_segments.append(base_codes)
 
                     for vol in self.vol_aug:
-                        processed_any |= self._ingest_audio_segment(np.clip(y * vol, -1.0, 1.0))
+                        codes = self._ingest_audio_segment(np.clip(y * vol, -1.0, 1.0))
+                        if codes is not None:
+                            file_segments.append(codes)
 
                     for pitch in self.pitch_aug:
                         y_pitch = librosa.effects.pitch_shift(y, sr=self.sample_rate, n_steps=pitch)
                         y_pitch = librosa.util.normalize(y_pitch.astype(np.float32, copy=False))
-                        processed_any |= self._ingest_audio_segment(y_pitch)
+                        codes = self._ingest_audio_segment(y_pitch)
+                        if codes is not None:
+                            file_segments.append(codes)
                 else:
                     for chunk in self._stream_audio(path_str):
-                        processed_any |= self._ingest_audio_segment(chunk)
+                        codes = self._ingest_audio_segment(chunk)
+                        if codes is not None:
+                            file_segments.append(codes)
 
-                if processed_any:
+                if file_segments:
+                    file_codes = torch.cat(file_segments, dim=-1)
+                    total_grains += self._add_palette_from_codes(file_codes, file_id)
                     n_files += 1
             except Exception as exc:
                 print(f"Error processing {path}: {exc}")
 
-        if not self.codedb_segments:
-            self.codedb = None
-            self.db = None
-            self.db_flat = None
-            self.db_flat_device = None
+        if not self._palette_codes_list:
+            self._prepare_palette_tensors()
             return {"message": "No audio processed. Please verify the input files."}
 
-        self._finalize_codebook()
-        codebook_size = 0 if self.db is None else self.db.shape[0]
+        self._prepare_palette_tensors()
+        return {"message": f"Done! {n_files} files processed. Codebook grains: {total_grains}."}
 
-        return {"message": f"Done! {n_files} files processed. Codebook grains: {codebook_size}."}
- 
+    def _meta_penalty(self, prev_idx, idx):
+        if self.palette_file_ids is None or self.palette_frame_indices is None:
+            return 0.0
+
+        if self.palette_file_ids[prev_idx] != self.palette_file_ids[idx]:
+            return 1.0
+
+        frame_delta = abs(int(self.palette_frame_indices[idx]) - int(self.palette_frame_indices[prev_idx]))
+        if frame_delta <= self.stride:
+            return 0.0
+
+        return min(1.0, frame_delta / float(self.unit * 4))
+
+    def _transition_cost(self, prev_idx, idx):
+        latent = 1.0 - float(torch.dot(self.palette_desc_full[prev_idx], self.palette_desc_full[idx]))
+        return latent + self._meta_penalty(prev_idx, idx)
+
+    def _beam_search(self, grains):
+        if not grains:
+            return []
+
+        beam_width = max(1, min(self.beam_width, max(len(grain["candidates"]) for grain in grains)))
+        history = []
+
+        first = grains[0]
+        beam = []
+        for cand_idx, candidate in enumerate(first["candidates"]):
+            score = candidate["emission"]
+            if self.prev_best_index is not None:
+                score += self.continuity * self._transition_cost(self.prev_best_index, candidate["ann_index"])
+            beam.append({"score": score, "candidate_idx": cand_idx, "back": -1})
+
+        beam = sorted(beam, key=lambda x: x["score"])[:beam_width]
+        history.append(beam)
+
+        for grain_idx in range(1, len(grains)):
+            grain = grains[grain_idx]
+            new_beam = []
+
+            for prev_idx, prev_state in enumerate(history[-1]):
+                prev_candidate = grains[grain_idx - 1]["candidates"][prev_state["candidate_idx"]]
+                prev_ann = prev_candidate["ann_index"]
+                for cand_idx, candidate in enumerate(grain["candidates"]):
+                    score = prev_state["score"] + candidate["emission"]
+                    if self.continuity > 0.0:
+                        score += self.continuity * self._transition_cost(prev_ann, candidate["ann_index"])
+                    new_beam.append({"score": score, "candidate_idx": cand_idx, "back": prev_idx})
+
+            new_beam = sorted(new_beam, key=lambda x: x["score"])[:beam_width]
+            history.append(new_beam)
+
+        best_idx = min(range(len(history[-1])), key=lambda i: history[-1][i]["score"])
+        path = [0] * len(grains)
+        for grain_idx in range(len(grains) - 1, -1, -1):
+            state = history[grain_idx][best_idx]
+            path[grain_idx] = state["candidate_idx"]
+            best_idx = state["back"]
+
+        return path
+
     def morph_audio(self, target_file):
         target_path = self._resolve_file_entry(target_file)
         if target_path is None or not target_path.exists():
             return self.sample_rate, np.zeros(1024, dtype=np.int16)
 
-        if self.db is None or self.db.numel() == 0:
+        if self.palette_codes is None or self.palette_codes.numel() == 0:
             return self.sample_rate, np.zeros(1024, dtype=np.int16)
 
         print("Creating codes for target audio")
         target_segments = []
 
         for chunk in self._stream_audio(str(target_path)):
-            _, quantized = self.encode(chunk)
-            if quantized is not None and quantized.shape[-1] >= self.unit:
-                target_segments.append(quantized)
+            audio_codes, _ = self.encode(chunk)
+            if audio_codes is not None and audio_codes.shape[-1] >= self.unit:
+                target_segments.append(audio_codes)
 
         if not target_segments:
             return self.sample_rate, np.zeros(1024, dtype=np.int16)
 
-        target_codes = torch.cat(target_segments, dim=-1)
+        target_codes = torch.cat(target_segments, dim=-1).squeeze(0)
 
         if target_codes.shape[-1] < self.unit:
             return self.sample_rate, np.zeros(1024, dtype=np.int16)
 
-        reconstructed = torch.zeros_like(target_codes)
+        self._ensure_rvq_setup(target_codes.unsqueeze(0))
+        output_codes = target_codes.clone()
 
-        # produce stereo when needed
-        if reconstructed.shape[0] == 1:
-            reconstructed = torch.vstack([reconstructed, reconstructed])
+        grain_starts = list(range(0, target_codes.shape[-1] - self.unit + 1, self.stride))
+        if not grain_starts:
+            return self.sample_rate, np.zeros(1024, dtype=np.int16)
+
+        weights = self._group_weights()
+        grains = []
 
         print("Matching grains...")
-        for i in tqdm(range(0, target_codes.shape[-1], self.stride)):
-            target_code = target_codes[:, :, i : i + self.unit]
-            if target_code.shape[-1] != self.unit:
+        for start in tqdm(grain_starts):
+            grain_codes = target_codes[:, start : start + self.unit]
+            full_desc, group_descs = self._descriptors_for_codes(grain_codes)
+            group_distances = self._group_distances(group_descs)
+
+            emission = torch.zeros(group_distances[0].shape[0])
+            for g_idx, dist in enumerate(group_distances):
+                if dist.numel() == 0:
+                    continue
+                emission += float(weights[g_idx]) * dist
+
+            candidate_count = min(self.candidate_count, emission.numel())
+            if candidate_count == 0:
                 continue
 
-            distances = self._compute_distances(target_code)
-            if distances.numel() == 0:
-                continue
+            top_indices = torch.topk(-emission, candidate_count).indices
+            candidates = []
+            fine_dist = group_distances[-1] if group_distances else emission
+            for idx in top_indices.tolist():
+                candidates.append(
+                    {
+                        "ann_index": idx,
+                        "emission": float(emission[idx]),
+                        "fine": float(fine_dist[idx]),
+                        "group_dists": [
+                            float(dist[idx]) if dist.numel() > 0 else 0.0 for dist in group_distances
+                        ],
+                    }
+                )
 
-            temperature = max(self.temperature, 1e-4)
-            logits = torch.nan_to_num(-distances / temperature, nan=-1e9, posinf=-1e9, neginf=1e9)
-            probabilities = torch.softmax(logits, dim=0)
+            candidates.sort(key=lambda x: x["emission"])
+            grains.append(
+                {
+                    "start": start,
+                    "candidates": candidates,
+                }
+            )
 
-            if not torch.isfinite(probabilities).all() or probabilities.sum() <= 0:
-                probabilities = torch.full_like(distances, 1.0 / distances.numel())
+        if not grains:
+            return self.sample_rate, np.zeros(1024, dtype=np.int16)
 
-            idx = torch.multinomial(probabilities, num_samples=1).item()
-            min_distance = distances.min().item()
+        path = self._beam_search(grains)
+        if path:
+            last_candidate = grains[-1]["candidates"][path[-1]]
+            self.prev_best_index = last_candidate["ann_index"]
 
-            code_closest = self.db[idx]
-            if min_distance > self.threshold:
-                code_closest = target_code.squeeze(0)
+        fine_group = self.rvq_groups[-1] if self.rvq_groups else []
+        coarse_group = self.rvq_groups[0] if self.rvq_groups else []
+        mid_group = self.rvq_groups[1] if self.rvq_groups else []
 
-            code_closest = code_closest.to(reconstructed.dtype)
-            end = min(i + self.unit, reconstructed.shape[-1])
-            span = end - i
-            code_slice = code_closest[:, :span]
+        for grain_idx, grain in enumerate(grains):
+            candidate_idx = path[grain_idx]
+            candidate = grain["candidates"][candidate_idx]
+            path_index = candidate["ann_index"]
+            start = grain["start"]
+            span = min(self.unit, output_codes.shape[-1] - start)
 
-            for channel in range(reconstructed.shape[0]):
-                reconstructed[channel, :, i:end] = code_slice
+            fallback_coarse = candidate["emission"] > self.threshold
+            top_k = min(self.top_k, len(grain["candidates"]))
+            top_candidates = grain["candidates"][:top_k]
+            fine_dists = torch.tensor([c["fine"] for c in top_candidates], dtype=torch.float32)
 
-        print("Decoding reconstructed/morphed audio...")
-        decoded = self.decode(reconstructed)
+            temperature = max(float(self.temperature), 1.0e-4)
+            logits = -fine_dists / temperature
+            weights_k = torch.softmax(logits, dim=0).cpu().numpy()
+
+            for q in coarse_group:
+                if fallback_coarse:
+                    continue
+                output_codes[q, start : start + span] = self.palette_codes[path_index, q, :span]
+
+            for q in mid_group:
+                output_codes[q, start : start + span] = self.palette_codes[path_index, q, :span]
+
+            for q in fine_group:
+                for u in range(span):
+                    scores = {}
+                    for k, cand in enumerate(top_candidates):
+                        code = int(self.palette_codes[cand["ann_index"], q, u].item())
+                        scores[code] = scores.get(code, 0.0) + float(weights_k[k])
+                    if scores:
+                        best_code = max(scores.items(), key=lambda kv: kv[1])[0]
+                        output_codes[q, start + u] = best_code
+
+        output_codes = output_codes.unsqueeze(0).to(torch.int64)
+        decoded = self.decode(audio_codes=output_codes)
 
         if decoded is None or getattr(decoded, "audio_values", None) is None:
             return self.sample_rate, np.zeros(1024, dtype=np.int16)
@@ -414,7 +652,6 @@ class LatentGranularSynthesis:
         if final_np.ndim == 1:
             prepared = final_np
         elif final_np.shape[0] <= final_np.shape[-1]:
-            # Heuristic: treat leading axis as channels when it is the smaller dimension.
             prepared = np.moveaxis(final_np, 0, -1)
         else:
             prepared = final_np
@@ -427,17 +664,29 @@ class LatentGranularSynthesis:
 
 synth = LatentGranularSynthesis()
 
+
 def build_dataset(files, aug_checkbox):
     return synth.build_dataset(files, aug_checkbox)
+
 
 def morph_audio(target_file):
     return synth.morph_audio(target_file)
 
+
 def temperature(temperature, threshold):
     return synth.set_temperature(temperature, threshold)
 
+
 def unit(unit, stride):
     return synth.set_unit(unit, stride)
+
+
+def matching(continuity, rvq_focus):
+    return synth.set_matching(continuity, rvq_focus)
+
+
+def topk(top_k):
+    return synth.set_topk(top_k)
 
 
 def _build_demo():
@@ -454,19 +703,30 @@ def _build_demo():
                 target_file = gr.File(label="Target sound")
 
                 with gr.Row():
-                    temp_slider = gr.Slider(0.1, 2.0, value=1.0, label="Temperature")
+                    temp_slider = gr.Slider(0.1, 2.0, value=0.5, label="Temperature")
                     threshold_slider = gr.Slider(0.1, 2.0, value=1.0, label="Threshold")
+
+                with gr.Row():
+                    continuity_slider = gr.Slider(0.0, 1.0, value=0.3, label="Continuity")
+                    rvq_focus_slider = gr.Slider(0.0, 1.0, value=0.5, label="RVQ Focus")
+
                 with gr.Row():
                     unit_slider = gr.Slider(1, 10, value=2, step=1, label="Unit Size")
                     stride_slider = gr.Slider(1, 10, value=2, step=1, label="Stride")
+
+                with gr.Row():
+                    topk_slider = gr.Slider(1, 8, value=4, step=1, label="Top-K")
 
                 b2 = gr.Button("Morph Audio")
                 audioplayer = gr.Audio(label="Output")
 
         temp_slider.change(temperature, inputs=[temp_slider, threshold_slider])
         threshold_slider.change(temperature, inputs=[temp_slider, threshold_slider])
+        continuity_slider.change(matching, inputs=[continuity_slider, rvq_focus_slider])
+        rvq_focus_slider.change(matching, inputs=[continuity_slider, rvq_focus_slider])
         unit_slider.change(unit, inputs=[unit_slider, stride_slider])
         stride_slider.change(unit, inputs=[unit_slider, stride_slider])
+        topk_slider.change(topk, inputs=[topk_slider])
 
         b1.click(build_dataset, inputs=[db_file, aug_checkbox], outputs=text)
         b2.click(morph_audio, inputs=target_file, outputs=audioplayer)

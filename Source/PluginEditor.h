@@ -67,6 +67,8 @@ private:
 
     juce::Slider temperatureSlider_;
     juce::Slider thresholdSlider_;
+    juce::Slider continuitySlider_;
+    juce::Slider rvqFocusSlider_;
     juce::Slider unitSlider_;
     juce::Slider strideSlider_;
     juce::Slider similaritySlider_;
@@ -79,6 +81,8 @@ private:
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> temperatureAttachment_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> thresholdAttachment_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> continuityAttachment_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rvqFocusAttachment_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> unitAttachment_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> strideAttachment_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> similarityAttachment_;
