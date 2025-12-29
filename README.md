@@ -5,7 +5,7 @@ A JUCE-based VST3/AU insert effect that morphs incoming audio into a palette of 
 
 - `Source/` – JUCE plugin sources (processor, editor, workers, backend interface).
 - `tools/export_dac.py` – utility to export DAC encoder/decoder artefacts for the native backend.
-- `python_project_idea.py` – original Python prototype used to explore the morphing pipeline.
+- `python_project_idea.py` – RVQ-aware Python prototype (continuity + Top-K mixing) for rapid iteration.
 - `requirements.txt` – Python dependencies for the export tool and prototype notebooks.
 
 ## Terminology
@@ -17,7 +17,7 @@ A JUCE-based VST3/AU insert effect that morphs incoming audio into a palette of 
 
 **DAW insert**
 1. Load target files to build the palette (DAC tokens + latent vectors).
-2. The DAW feeds track audio to the plugin; each block is encoded, matched to the palette (greedy nearest-neighbour), decoded, then mixed with dry.
+2. The DAW feeds track audio to the plugin; each block is encoded, matched with RVQ-aware grain descriptors + continuity-constrained beam search, mixed via Top-K token voting, decoded, then blended with dry.
 3. If you change palette/parameters, the track is reprocessed by the DAW (bounce/re-render) rather than the plugin mutating already-rendered audio.
 
 **Standalone**
@@ -32,13 +32,14 @@ A JUCE-based VST3/AU insert effect that morphs incoming audio into a palette of 
 [Load Source Audio] [Clear Source]  Source: <filename>   (standalone only)
 Status: <palette status>                         Progress: <percent>
 Backend: Native / Python Bridge
-Knobs: Temperature | Threshold | Unit | Stride | Similarity | Envelope | Dry/Wet | Output
+Knobs: Temperature | Threshold | Continuity | RVQ Focus | Unit | Stride | Similarity | Envelope | Dry/Wet | Output
 ```
 
 ## Performance Notes
 
 - Lightweight cache stores recently decoded morph blocks to avoid recomputing repeats.
 - Temporal smoothing is applied to the morphed output (controlled by the Envelope slider; 0 disables smoothing).
+- Palette grain descriptors are built with the current Unit/Stride; change them and rebuild the palette.
 
 ## Prerequisites
 
@@ -58,7 +59,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-This provides the tooling needed for DAC export (`tools/export_dac.py`) and for experimenting with the original Python morphing prototype.
+This provides the tooling needed for DAC export (`tools/export_dac.py`) and for experimenting with the RVQ-aware Python morphing prototype.
 
 ## Building the Plugin
 
@@ -95,7 +96,7 @@ If the environment variable is absent or ONNX Runtime is unavailable, the plugin
 
 ## Novelty Ideas (Later)
 
-- Palette blending: interpolate between top-k matches for “style mixing.”
+- Palette blending: expand Top-K mixing to latent barycenters (disabled by default; can sound washed out).
 - Latent morph automation: sweep across palette clusters using MIDI/automation.
 - Semantic tags for palette files and tag-driven matching curves.
 
@@ -104,7 +105,8 @@ If the environment variable is absent or ONNX Runtime is unavailable, the plugin
 - [x] Scaffold JUCE VST3/AU project with parameter set, workers, and lock-free FIFOs.
 - [x] Provide DAC export tool and ONNX Runtime backend stub integration.
 - [ ] Replace linear `PaletteIndex` with HNSWlib ANN implementation and metadata catalogue.
-- [ ] Implement real latent segment matching in `MatchWorker` (temperature, threshold, stride, envelope follow).
+- [x] Implement RVQ-aware grain matching with continuity + Top-K mixing in the processor path.
+- [ ] Integrate the matching path into `MatchWorker` for async background matching.
 - [ ] Integrate onset detector refinements (spectral flux, look-ahead) tuned for drum/percussive sources.
 - [ ] Add persistent plugin state for palette file lists and backend settings.
 - [ ] Build production-ready UI (file browser, progress meters, error messaging, parameter grouping).
