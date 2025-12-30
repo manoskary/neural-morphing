@@ -144,7 +144,7 @@ void NeuralMorphingLookAndFeel::drawComboBox(juce::Graphics& g, int width, int h
 
 juce::Font NeuralMorphingLookAndFeel::getComboBoxFont(juce::ComboBox&)
 {
-    return juce::Font(14.0f, juce::Font::bold);
+    return juce::Font(juce::FontOptions(14.0f, juce::Font::bold));
 }
 
 NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMorphingAudioProcessor& p)
@@ -281,7 +281,7 @@ void NeuralMorphingAudioProcessorEditor::paint(juce::Graphics& g)
     else
     {
         g.setColour(neonGreen);
-        g.setFont(juce::Font(22.0f, juce::Font::bold));
+        g.setFont(juce::Font(juce::FontOptions(22.0f, juce::Font::bold)));
         g.drawText("Neural Morphing", logoBounds_, juce::Justification::centredLeft, true);
     }
 
@@ -334,7 +334,7 @@ void NeuralMorphingAudioProcessorEditor::paintOverChildren(juce::Graphics& g)
                 
                 // Draw WHITE text
                 g.setColour(juce::Colours::white);
-                g.setFont(juce::Font(16.0f, juce::Font::bold));
+                g.setFont(juce::Font(juce::FontOptions(16.0f, juce::Font::bold)));
                 g.drawText(sliderLabels_[i]->getText(), bounds, juce::Justification::centred);
             }
         }
@@ -687,7 +687,7 @@ void NeuralMorphingAudioProcessorEditor::setupSlider(juce::Slider& slider, const
     label->setColour(juce::Label::textColourId, neonGreen);
     label->setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
     label->setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
-    label->setFont(juce::Font(14.0f, juce::Font::bold));
+    label->setFont(juce::Font(juce::FontOptions(14.0f, juce::Font::bold)));
     label->setInterceptsMouseClicks(false, false);
     
     // Critical: Add label AFTER slider so it's painted on top

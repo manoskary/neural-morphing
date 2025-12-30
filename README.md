@@ -46,7 +46,7 @@ Knobs: Temperature | Threshold | Continuity | RVQ Focus | Unit | Stride | Simila
 - **JUCE** checked out as a submodule (`git submodule update --init --recursive`).
 - **CMake ≥ 3.22** and a C++17 compiler.
 - Platform SDKs required by JUCE.
-  - Linux (Debian/Ubuntu): `sudo apt install libxrandr-dev libxinerama-dev libxcursor-dev libxrender-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev libglu1-mesa-dev libgtk-3-dev libwebkit2gtk-4.0-dev libcurl4-openssl-dev`
+  - Linux (Debian/Ubuntu): `sudo apt install libxrandr-dev libxinerama-dev libxcursor-dev libxrender-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev libglu1-mesa-dev libgtk-3-dev libwebkit2gtk-4.1-dev libcurl4-openssl-dev`
 - Optional: ONNX Runtime development package if you plan to build the native DAC backend (`onnxruntime-dev` on Ubuntu, or use the prebuilt SDK).
 
 ### Python environment

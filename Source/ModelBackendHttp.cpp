@@ -59,7 +59,7 @@ TokenBlock ModelBackendHttp::encodePCM(const juce::AudioBuffer<float>& mono)
 
     // Save audio to temporary file
     juce::TemporaryFile tempFile(".wav");
-    auto outputStream = tempFile.getFile().createOutputStream();
+    std::unique_ptr<juce::OutputStream> outputStream = tempFile.getFile().createOutputStream();
     if (outputStream == nullptr)
     {
         juce::ScopedLock lock(errorMutex_);
@@ -68,13 +68,12 @@ TokenBlock ModelBackendHttp::encodePCM(const juce::AudioBuffer<float>& mono)
     }
     
     juce::WavAudioFormat wavFormat;
-    std::unique_ptr<juce::AudioFormatWriter> writer(wavFormat.createWriterFor(
-        outputStream.release(),
-        sampleRate_,
-        mono.getNumChannels(),
-        16,
-        {},
-        0));
+    std::unique_ptr<juce::AudioFormatWriter> writer = wavFormat.createWriterFor(
+        outputStream,
+        juce::AudioFormatWriterOptions()
+            .withSampleRate(sampleRate_)
+            .withNumChannels(mono.getNumChannels())
+            .withBitsPerSample(16));
 
     if (writer == nullptr)
     {
