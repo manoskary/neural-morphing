@@ -29,6 +29,7 @@ env/
 *.temp
 
 /build/
+/build_nopy/
 
 # any wave files
 *.wav

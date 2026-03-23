@@ -58,6 +58,7 @@ public:
     
     // Backend management
     void switchBackend(int backendType);
+    void setBridgeCodec(int codecType);
     juce::String getBackendStatus() const;
     bool isBackendReady() const;
 
@@ -93,7 +94,7 @@ private:
     std::unique_ptr<MatchWorker> matchWorker_;
 
     OnsetDetector onsetDetector_;
-    juce::AudioBuffer<float> monoScratch_;
+    juce::AudioBuffer<float> backendInputScratch_;
     juce::AudioBuffer<float> morphScratch_;
 
     double currentSampleRate_ = 44100.0;

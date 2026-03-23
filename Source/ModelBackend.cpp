@@ -34,6 +34,21 @@ public:
         return 2;
     }
 
+    int requiredInputChannels() const override
+    {
+        return 1;
+    }
+
+    double frameRateHz() const override
+    {
+        return static_cast<double>(sampleRate_) / static_cast<double>(frameSize_);
+    }
+
+    TokenLayout tokenLayout() const override
+    {
+        return TokenLayout::CodebookMajor;
+    }
+
     TokenBlock encodePCM(const juce::AudioBuffer<float>& mono) override
     {
         const int samples = mono.getNumSamples();

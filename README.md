@@ -6,6 +6,8 @@ A JUCE-based VST3/AU insert effect that morphs incoming audio into a palette of 
 - `Source/` – JUCE plugin sources (processor, editor, workers, backend interface).
 - `tools/export_dac.py` – utility to export DAC encoder/decoder artefacts for the native backend.
 - `python_project_idea.py` – RVQ-aware Python prototype (continuity + Top-K mixing) for rapid iteration.
+- `tools/evaluate_morphing.py` – deterministic evaluation harness (4 ablations + objective metrics).
+- `tools/run_morph_ablation.py` – single-run ablation worker that emits audio/tokens/match indices/latency.
 - `requirements.txt` – Python dependencies for the export tool and prototype notebooks.
 
 ## Terminology
@@ -32,6 +34,7 @@ A JUCE-based VST3/AU insert effect that morphs incoming audio into a palette of 
 [Load Source Audio] [Clear Source]  Source: <filename>   (standalone only)
 Status: <palette status>                         Progress: <percent>
 Backend: Native / Python Bridge
+Bridge Codec: DAC / SpectroStream
 Knobs: Temperature | Threshold | Continuity | RVQ Focus | Unit | Stride | Similarity | Envelope | Dry/Wet | Output
 ```
 
@@ -87,6 +90,56 @@ After a successful build you can install the plugin:
 4. Ensure the CMake build is configured with ONNX Runtime available (`-DNEURAL_MORPHING_ENABLE_ONNX=ON`).
 
 If the environment variable is absent or ONNX Runtime is unavailable, the plugin automatically falls back to the stub backend for development.
+
+## Python Bridge: Multi-Codec + Realtime PCM
+
+The HTTP bridge now supports:
+- Codec switching (`dac`, `spectrostream`) via `POST /codec`
+- Capability handshake via `GET /capabilities`
+- Realtime-friendly in-memory endpoints:
+  - `POST /encode_pcm`
+  - `POST /decode_pcm`
+- Backward-compatible endpoints:
+  - `GET /health`
+  - `POST /encode`
+  - `POST /tokens_to_vectors`
+  - `POST /decode`
+
+Environment variables (bridge):
+- `NEURAL_MORPHING_BRIDGE_CODEC` (default: `dac`)
+- `BRIDGE_WARM_START` (`0`/`1`, default: `0`)
+- `BRIDGE_ENABLE_STREAM_SESSIONS` (`0`/`1`, default: `0`, enables optional `/session/*` API)
+- `DAC_MODEL_NAME` (default: `descript/dac_44khz`)
+
+For SpectroStream support, install Magenta RT and dependencies in your bridge environment:
+```bash
+pip install magenta_rt
+```
+
+## Evaluation Harness
+
+Prepare a deterministic manifest:
+```bash
+python tools/evaluate_morphing.py prepare \
+  --palette-dir /path/to/palette_train \
+  --source-dir /path/to/source_eval \
+  --reference-dir /path/to/original_refs \
+  --output /tmp/neural_morph_manifest.json \
+  --seed 1234
+```
+
+Run the 4-ablation matrix and compute metrics:
+```bash
+python tools/evaluate_morphing.py evaluate \
+  --manifest /tmp/neural_morph_manifest.json \
+  --output-dir /tmp/neural_morph_eval \
+  --runner-cmd "python tools/run_morph_ablation.py --palette-manifest {palette_manifest} --source {source} --output-wav {output_wav} --tokens-npy {tokens_npy} --match-indices-npy {match_indices_npy} --latency-json {latency_json} --matcher {matcher} --swap {swap}"
+```
+
+Reports are written to `.../reports/` with:
+- per-clip CSV
+- summary JSON (mean/std/95% CI + paired significance)
+- reproducibility JSON
 
 ## Roadmap (Short)
 

@@ -17,6 +17,9 @@ public:
     int sampleRate() const override { return sampleRate_; }
     int codebookCount() const override { return numCodebooks_; }
     int embeddingDimension() const override { return embeddingDim_; }
+    int requiredInputChannels() const override { return 1; }
+    double frameRateHz() const override { return 0.0; }
+    TokenLayout tokenLayout() const override { return TokenLayout::CodebookMajor; }
 
     TokenBlock encodePCM(const juce::AudioBuffer<float>& mono) override;
     std::vector<float> tokensToVectorRow(const TokenBlock& block, int frameIndex) override;

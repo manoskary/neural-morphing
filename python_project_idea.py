@@ -8,6 +8,7 @@ Top-K mixing for finer layers.
 
 import contextlib
 import os
+import time
 from pathlib import Path
 
 import gradio as gr
@@ -54,6 +55,9 @@ class LatentGranularSynthesis:
         self.top_k = 4
         self.candidate_count = 96
         self.beam_width = 12
+        self.match_mode = "beam"
+        self.swap_mode = "rvq_group"
+        self.last_timings = {"encode_ms": 0.0, "decode_ms": 0.0, "total_ms": 0.0}
 
         self.files = None
         self.last_aug = False
@@ -387,6 +391,18 @@ class LatentGranularSynthesis:
     def set_topk(self, top_k):
         self.top_k = max(int(top_k), 1)
 
+    def set_ablation(self, match_mode: str, swap_mode: str):
+        match_mode = (match_mode or "beam").strip().lower()
+        swap_mode = (swap_mode or "rvq_group").strip().lower()
+
+        if match_mode not in ("beam", "greedy"):
+            raise ValueError(f"Unsupported match_mode: {match_mode}")
+        if swap_mode not in ("rvq_group", "full_layer"):
+            raise ValueError(f"Unsupported swap_mode: {swap_mode}")
+
+        self.match_mode = match_mode
+        self.swap_mode = swap_mode
+
     def build_dataset(self, files, aug_checkbox: bool):
         resolved_files = self._materialize_files(files)
         if not resolved_files:
@@ -464,9 +480,26 @@ class LatentGranularSynthesis:
         latent = 1.0 - float(torch.dot(self.palette_desc_full[prev_idx], self.palette_desc_full[idx]))
         return latent + self._meta_penalty(prev_idx, idx)
 
-    def _beam_search(self, grains):
+    def _select_path(self, grains):
         if not grains:
             return []
+
+        if self.match_mode == "greedy":
+            path = []
+            prev_best = self.prev_best_index
+            for grain in grains:
+                best_idx = 0
+                best_score = float("inf")
+                for cand_idx, candidate in enumerate(grain["candidates"]):
+                    score = candidate["emission"]
+                    if self.continuity > 0.0 and prev_best is not None:
+                        score += self.continuity * self._transition_cost(prev_best, candidate["ann_index"])
+                    if score < best_score:
+                        best_score = score
+                        best_idx = cand_idx
+                path.append(best_idx)
+                prev_best = grain["candidates"][best_idx]["ann_index"]
+            return path
 
         beam_width = max(1, min(self.beam_width, max(len(grain["candidates"]) for grain in grains)))
         history = []
@@ -507,16 +540,26 @@ class LatentGranularSynthesis:
 
         return path
 
-    def morph_audio(self, target_file):
+    def morph_audio(self, target_file, return_debug=False):
+        started = time.perf_counter()
+        self.last_timings = {"encode_ms": 0.0, "decode_ms": 0.0, "total_ms": 0.0}
+
+        def _fallback():
+            audio = np.zeros(1024, dtype=np.int16)
+            if return_debug:
+                return self.sample_rate, audio, {"tokens": np.zeros((1, 1), dtype=np.int32), "match_indices": np.zeros(0, dtype=np.int32)}
+            return self.sample_rate, audio
+
         target_path = self._resolve_file_entry(target_file)
         if target_path is None or not target_path.exists():
-            return self.sample_rate, np.zeros(1024, dtype=np.int16)
+            return _fallback()
 
         if self.palette_codes is None or self.palette_codes.numel() == 0:
-            return self.sample_rate, np.zeros(1024, dtype=np.int16)
+            return _fallback()
 
         print("Creating codes for target audio")
         target_segments = []
+        encode_started = time.perf_counter()
 
         for chunk in self._stream_audio(str(target_path)):
             audio_codes, _ = self.encode(chunk)
@@ -524,19 +567,20 @@ class LatentGranularSynthesis:
                 target_segments.append(audio_codes)
 
         if not target_segments:
-            return self.sample_rate, np.zeros(1024, dtype=np.int16)
+            return _fallback()
 
         target_codes = torch.cat(target_segments, dim=-1).squeeze(0)
+        self.last_timings["encode_ms"] = (time.perf_counter() - encode_started) * 1000.0
 
         if target_codes.shape[-1] < self.unit:
-            return self.sample_rate, np.zeros(1024, dtype=np.int16)
+            return _fallback()
 
         self._ensure_rvq_setup(target_codes.unsqueeze(0))
         output_codes = target_codes.clone()
 
         grain_starts = list(range(0, target_codes.shape[-1] - self.unit + 1, self.stride))
         if not grain_starts:
-            return self.sample_rate, np.zeros(1024, dtype=np.int16)
+            return _fallback()
 
         weights = self._group_weights()
         grains = []
@@ -581,9 +625,9 @@ class LatentGranularSynthesis:
             )
 
         if not grains:
-            return self.sample_rate, np.zeros(1024, dtype=np.int16)
+            return _fallback()
 
-        path = self._beam_search(grains)
+        path = self._select_path(grains)
         if path:
             last_candidate = grains[-1]["candidates"][path[-1]]
             self.prev_best_index = last_candidate["ann_index"]
@@ -592,45 +636,54 @@ class LatentGranularSynthesis:
         coarse_group = self.rvq_groups[0] if self.rvq_groups else []
         mid_group = self.rvq_groups[1] if self.rvq_groups else []
 
+        matched_indices = []
         for grain_idx, grain in enumerate(grains):
             candidate_idx = path[grain_idx]
             candidate = grain["candidates"][candidate_idx]
             path_index = candidate["ann_index"]
+            matched_indices.append(path_index)
             start = grain["start"]
             span = min(self.unit, output_codes.shape[-1] - start)
 
             fallback_coarse = candidate["emission"] > self.threshold
-            top_k = min(self.top_k, len(grain["candidates"]))
-            top_candidates = grain["candidates"][:top_k]
-            fine_dists = torch.tensor([c["fine"] for c in top_candidates], dtype=torch.float32)
-
-            temperature = max(float(self.temperature), 1.0e-4)
-            logits = -fine_dists / temperature
-            weights_k = torch.softmax(logits, dim=0).cpu().numpy()
-
-            for q in coarse_group:
+            if self.swap_mode == "full_layer":
                 if fallback_coarse:
                     continue
-                output_codes[q, start : start + span] = self.palette_codes[path_index, q, :span]
+                output_codes[:, start : start + span] = self.palette_codes[path_index, :, :span]
+            else:
+                top_k = min(self.top_k, len(grain["candidates"]))
+                top_candidates = grain["candidates"][:top_k]
+                fine_dists = torch.tensor([c["fine"] for c in top_candidates], dtype=torch.float32)
 
-            for q in mid_group:
-                output_codes[q, start : start + span] = self.palette_codes[path_index, q, :span]
+                temperature = max(float(self.temperature), 1.0e-4)
+                logits = -fine_dists / temperature
+                weights_k = torch.softmax(logits, dim=0).cpu().numpy()
 
-            for q in fine_group:
-                for u in range(span):
-                    scores = {}
-                    for k, cand in enumerate(top_candidates):
-                        code = int(self.palette_codes[cand["ann_index"], q, u].item())
-                        scores[code] = scores.get(code, 0.0) + float(weights_k[k])
-                    if scores:
-                        best_code = max(scores.items(), key=lambda kv: kv[1])[0]
-                        output_codes[q, start + u] = best_code
+                for q in coarse_group:
+                    if fallback_coarse:
+                        continue
+                    output_codes[q, start : start + span] = self.palette_codes[path_index, q, :span]
+
+                for q in mid_group:
+                    output_codes[q, start : start + span] = self.palette_codes[path_index, q, :span]
+
+                for q in fine_group:
+                    for u in range(span):
+                        scores = {}
+                        for k, cand in enumerate(top_candidates):
+                            code = int(self.palette_codes[cand["ann_index"], q, u].item())
+                            scores[code] = scores.get(code, 0.0) + float(weights_k[k])
+                        if scores:
+                            best_code = max(scores.items(), key=lambda kv: kv[1])[0]
+                            output_codes[q, start + u] = best_code
 
         output_codes = output_codes.unsqueeze(0).to(torch.int64)
+        decode_started = time.perf_counter()
         decoded = self.decode(audio_codes=output_codes)
+        self.last_timings["decode_ms"] = (time.perf_counter() - decode_started) * 1000.0
 
         if decoded is None or getattr(decoded, "audio_values", None) is None:
-            return self.sample_rate, np.zeros(1024, dtype=np.int16)
+            return _fallback()
 
         audio_output = decoded.audio_values
 
@@ -658,6 +711,14 @@ class LatentGranularSynthesis:
 
         clipped = np.clip(prepared, -1.0, 1.0)
         scaled = (clipped * 32767).astype(np.int16, copy=False)
+        self.last_timings["total_ms"] = (time.perf_counter() - started) * 1000.0
+
+        if return_debug:
+            return self.sample_rate, scaled, {
+                "tokens": output_codes.squeeze(0).detach().cpu().numpy().astype(np.int32),
+                "match_indices": np.asarray(matched_indices, dtype=np.int32),
+                "timings": dict(self.last_timings),
+            }
 
         return self.sample_rate, scaled
 

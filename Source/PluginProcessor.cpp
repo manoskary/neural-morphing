@@ -77,7 +77,7 @@ NeuralMorphingAudioProcessor::NeuralMorphingAudioProcessor()
     initialiseBackend();
     createWorkers();
 
-    monoScratch_.setSize(1, monoScratchReserve);
+    backendInputScratch_.setSize(2, monoScratchReserve);
 }
 
 NeuralMorphingAudioProcessor::~NeuralMorphingAudioProcessor()
@@ -149,26 +149,39 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
 
     if (backendReady)
     {
-        if (monoScratch_.getNumSamples() < numSamples)
-            monoScratch_.setSize(1, numSamples, false, false, true);
+        const int requiredChannels = juce::jmax(1, backend_->requiredInputChannels());
+        if (backendInputScratch_.getNumSamples() < numSamples || backendInputScratch_.getNumChannels() != requiredChannels)
+            backendInputScratch_.setSize(requiredChannels, numSamples, false, false, true);
 
-        monoScratch_.clear();
-        const int channels = juce::jmax(1, buffer.getNumChannels());
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-            monoScratch_.addFrom(0, 0, buffer, ch, 0, numSamples, 1.0f / static_cast<float>(channels));
+        backendInputScratch_.clear();
+        const int inputChannels = juce::jmax(1, buffer.getNumChannels());
+
+        if (requiredChannels == 1)
+        {
+            for (int ch = 0; ch < inputChannels; ++ch)
+                backendInputScratch_.addFrom(0, 0, buffer, ch, 0, numSamples, 1.0f / static_cast<float>(inputChannels));
+        }
+        else
+        {
+            for (int ch = 0; ch < requiredChannels; ++ch)
+            {
+                const int srcCh = juce::jmin(ch, inputChannels - 1);
+                backendInputScratch_.copyFrom(ch, 0, buffer, srcCh, 0, numSamples);
+            }
+        }
 
         if (!paletteReady())
         {
-            if (isSilent(monoScratch_))
+            if (isSilent(backendInputScratch_))
                 targetSegments_.clear();
             resetMorphSmoothing();
             lastMatchedIndex_ = -1;
         }
         else
         {
-            if (!isSilent(monoScratch_))
+            if (!isSilent(backendInputScratch_))
             {
-                auto targetTokens = backend_->encodePCM(monoScratch_);
+                auto targetTokens = backend_->encodePCM(backendInputScratch_);
                 if (!targetTokens.tokens.empty() && targetTokens.frames > 0)
                 {
                     if (targetSegments_.size() >= maxTargetSegments_)
@@ -323,26 +336,33 @@ bool NeuralMorphingAudioProcessor::renderStandaloneSource(juce::AudioBuffer<floa
         return false;
 
     const int totalSamples = standaloneSourceBuffer_.getNumSamples();
-    if (standaloneSourcePosition_ >= totalSamples)
-    {
-        buffer.clear();
-        return true;
-    }
-
     const int numSamples = buffer.getNumSamples();
     const int outputChannels = buffer.getNumChannels();
     const int sourceChannels = standaloneSourceBuffer_.getNumChannels();
-    const int samplesRemaining = juce::jmax(0, totalSamples - static_cast<int>(standaloneSourcePosition_));
-    const int samplesToCopy = juce::jmin(numSamples, samplesRemaining);
-
     buffer.clear();
-    for (int ch = 0; ch < outputChannels; ++ch)
+
+    int writePosition = 0;
+    while (writePosition < numSamples)
     {
-        const int srcCh = juce::jmin(ch, sourceChannels - 1);
-        buffer.copyFrom(ch, 0, standaloneSourceBuffer_, srcCh, static_cast<int>(standaloneSourcePosition_), samplesToCopy);
+        if (standaloneSourcePosition_ >= totalSamples)
+            standaloneSourcePosition_ = 0;
+
+        const int sourceOffset = static_cast<int>(standaloneSourcePosition_);
+        const int samplesRemainingInSource = juce::jmax(0, totalSamples - sourceOffset);
+        const int samplesToCopy = juce::jmin(numSamples - writePosition, samplesRemainingInSource);
+        if (samplesToCopy <= 0)
+            break;
+
+        for (int ch = 0; ch < outputChannels; ++ch)
+        {
+            const int srcCh = juce::jmin(ch, sourceChannels - 1);
+            buffer.copyFrom(ch, writePosition, standaloneSourceBuffer_, srcCh, sourceOffset, samplesToCopy);
+        }
+
+        writePosition += samplesToCopy;
+        standaloneSourcePosition_ += samplesToCopy;
     }
 
-    standaloneSourcePosition_ += samplesToCopy;
     return true;
 }
 
@@ -417,6 +437,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralMorphingAudioProcessor
     backendChoices.add("Python Bridge");
 #endif
     params.push_back(std::make_unique<juce::AudioParameterChoice>("backend", "Backend", backendChoices, 0));
+
+    // Bridge codec selection (used by HTTP backend, ignored by native backends)
+    juce::StringArray bridgeCodecChoices;
+    bridgeCodecChoices.add("DAC");
+    bridgeCodecChoices.add("SpectroStream");
+    params.push_back(std::make_unique<juce::AudioParameterChoice>("bridgeCodec", "Bridge Codec", bridgeCodecChoices, 0));
 
     return { params.begin(), params.end() };
 }
@@ -865,7 +891,14 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
                 prevSmoothed = morphSample;
             }
             const float blendedMorph = similarity * morphSample + (1.0f - similarity) * drySample;
-            const float outputSample = dryWet * blendedMorph + (1.0f - dryWet) * drySample;
+            float outputSample = dryWet * blendedMorph + (1.0f - dryWet) * drySample;
+
+            // Ensure Dry/Wet endpoints always reach true dry/true wet regardless of Similarity.
+            if (dryWet <= 0.0f)
+                outputSample = drySample;
+            else if (dryWet >= 1.0f)
+                outputSample = morphSample;
+
             buffer.setSample(ch, sample, outputSample);
         }
 
@@ -995,12 +1028,27 @@ void NeuralMorphingAudioProcessor::initialiseBackend()
 #endif
     }
 
+    const auto applyBridgeCodecSelection = [&]()
+    {
+        if (backend_ == nullptr)
+            return;
+
+        int codecChoice = 0;
+        if (auto* codecParam = dynamic_cast<juce::AudioParameterChoice*>(parameters.getParameter("bridgeCodec")))
+            codecChoice = codecParam->getIndex();
+
+        const juce::String codecId = (codecChoice == 1) ? "spectrostream" : "dac";
+        backend_->setCodec(codecId.toStdString());
+    };
+
     // Fallback to stub backend if nothing else worked
     if (backend_ == nullptr)
         backend_ = createStubModelBackend();
 
     if (backend_ != nullptr && !backend_->ready())
         backend_->load("");
+
+    applyBridgeCodecSelection();
 
     const int vectorDim = (backend_ != nullptr) ? juce::jmax(1, backend_->embeddingDimension()) : 2;
     paletteIndex_ = std::make_unique<PaletteIndex>(vectorDim);
@@ -1023,6 +1071,28 @@ void NeuralMorphingAudioProcessor::switchBackend(int backendType)
     createWorkers();
 }
 
+void NeuralMorphingAudioProcessor::setBridgeCodec(int codecType)
+{
+    if (auto* param = dynamic_cast<juce::AudioParameterChoice*>(parameters.getParameter("bridgeCodec")))
+        *param = codecType;
+
+    if (backend_ == nullptr)
+        return;
+
+    const juce::String codecId = (codecType == 1) ? "spectrostream" : "dac";
+    const bool changed = backend_->setCodec(codecId.toStdString());
+    if (changed)
+    {
+        // Codec switches can change embedding dimensionality (e.g. DAC vs SpectroStream),
+        // so recreate the palette index/workers to keep vector dimensions aligned.
+        shutdownWorkers();
+        const int vectorDim = juce::jmax(1, backend_->embeddingDimension());
+        paletteIndex_ = std::make_unique<PaletteIndex>(vectorDim);
+        invalidateMorphCache();
+        createWorkers();
+    }
+}
+
 juce::String NeuralMorphingAudioProcessor::getBackendStatus() const
 {
     if (backend_ == nullptr)
@@ -1037,7 +1107,9 @@ juce::String NeuralMorphingAudioProcessor::getBackendStatus() const
         juce::String error = httpBackend->getLastError();
         if (error.isNotEmpty())
             return "HTTP Backend Error: " + error;
-        return "HTTP Backend connected to " + httpBackend->getServerUrl();
+        return "HTTP Backend connected to " + httpBackend->getServerUrl()
+               + " | codec=" + httpBackend->activeCodec()
+               + " | in=" + juce::String(backend_->requiredInputChannels()) + "ch";
     }
 #endif
 

@@ -123,12 +123,26 @@ void PaletteWorker::processFiles()
         juce::AudioBuffer<float> tempBuffer(static_cast<int>(reader->numChannels), static_cast<int>(length));
         reader->read(&tempBuffer, 0, static_cast<int>(length), 0, true, true);
 
-        juce::AudioBuffer<float> monoBuffer(1, static_cast<int>(length));
-        monoBuffer.clear();
-        for (int ch = 0; ch < tempBuffer.getNumChannels(); ++ch)
-            monoBuffer.addFrom(0, 0, tempBuffer, ch, 0, static_cast<int>(length), 1.0f / static_cast<float>(tempBuffer.getNumChannels()));
+        const int requiredChannels = juce::jmax(1, backend_.requiredInputChannels());
+        juce::AudioBuffer<float> modelInput(requiredChannels, static_cast<int>(length));
+        modelInput.clear();
 
-        auto tokens = backend_.encodePCM(monoBuffer);
+        if (requiredChannels == 1)
+        {
+            for (int ch = 0; ch < tempBuffer.getNumChannels(); ++ch)
+                modelInput.addFrom(0, 0, tempBuffer, ch, 0, static_cast<int>(length), 1.0f / static_cast<float>(tempBuffer.getNumChannels()));
+        }
+        else
+        {
+            const int srcChannels = juce::jmax(1, tempBuffer.getNumChannels());
+            for (int ch = 0; ch < requiredChannels; ++ch)
+            {
+                const int srcCh = juce::jmin(ch, srcChannels - 1);
+                modelInput.copyFrom(ch, 0, tempBuffer, srcCh, 0, static_cast<int>(length));
+            }
+        }
+
+        auto tokens = backend_.encodePCM(modelInput);
         if (tokens.empty())
             continue;
 

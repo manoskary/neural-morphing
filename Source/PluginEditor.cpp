@@ -204,6 +204,8 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     // Setup backend selector
     addAndMakeVisible(backendSelector_);
     addAndMakeVisible(backendLabel_);
+    addAndMakeVisible(bridgeCodecSelector_);
+    addAndMakeVisible(bridgeCodecLabel_);
     addAndMakeVisible(statusDisplayLabel_);
     
     backendSelector_.addItem("Native", 1);
@@ -212,9 +214,15 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
 #endif
     
     backendAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor_.parameters, "backend", backendSelector_);
+
+    bridgeCodecSelector_.addItem("DAC", 1);
+    bridgeCodecSelector_.addItem("SpectroStream", 2);
+    bridgeCodecAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor_.parameters, "bridgeCodec", bridgeCodecSelector_);
     
     backendLabel_.attachToComponent(&backendSelector_, true);
     backendLabel_.setColour(juce::Label::textColourId, textGrey);
+    bridgeCodecLabel_.attachToComponent(&bridgeCodecSelector_, true);
+    bridgeCodecLabel_.setColour(juce::Label::textColourId, textGrey);
     statusDisplayLabel_.setJustificationType(juce::Justification::centredLeft);
     statusDisplayLabel_.setColour(juce::Label::textColourId, neonGreen.withAlpha(0.8f));
 
@@ -237,6 +245,7 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     loadSourceButton_.addListener(this);
     clearSourceButton_.addListener(this);
     backendSelector_.addListener(this);
+    bridgeCodecSelector_.addListener(this);
 
     startTimerHz(10);
 }
@@ -251,6 +260,7 @@ NeuralMorphingAudioProcessorEditor::~NeuralMorphingAudioProcessorEditor()
     loadSourceButton_.removeListener(this);
     clearSourceButton_.removeListener(this);
     backendSelector_.removeListener(this);
+    bridgeCodecSelector_.removeListener(this);
 }
 
 void NeuralMorphingAudioProcessorEditor::paint(juce::Graphics& g)
@@ -423,6 +433,11 @@ void NeuralMorphingAudioProcessorEditor::resized()
     // Backend selector row
     juce::Rectangle<int> backendArea(controlsX, currentY, controlsWidth, 32);
     backendSelector_.setBounds(backendArea.removeFromLeft(220).reduced(2));
+    currentY += 32 + 4;
+
+    // Bridge codec row
+    juce::Rectangle<int> bridgeCodecArea(controlsX, currentY, controlsWidth, 32);
+    bridgeCodecSelector_.setBounds(bridgeCodecArea.removeFromLeft(220).reduced(2));
     currentY += 32 + 4;
 
     // Backend status row
@@ -629,6 +644,11 @@ void NeuralMorphingAudioProcessorEditor::comboBoxChanged(juce::ComboBox* comboBo
     {
         int backendIndex = backendSelector_.getSelectedItemIndex();
         processor_.switchBackend(backendIndex);
+    }
+    else if (comboBox == &bridgeCodecSelector_)
+    {
+        int codecIndex = bridgeCodecSelector_.getSelectedItemIndex();
+        processor_.setBridgeCodec(codecIndex);
     }
 }
 

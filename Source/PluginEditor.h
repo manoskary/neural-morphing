@@ -93,8 +93,11 @@ private:
     // Backend selection UI
     juce::ComboBox backendSelector_;
     juce::Label backendLabel_{ "Backend", "Backend:" };
+    juce::ComboBox bridgeCodecSelector_;
+    juce::Label bridgeCodecLabel_{ "BridgeCodec", "Codec:" };
     juce::Label statusDisplayLabel_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> backendAttachment_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> bridgeCodecAttachment_;
 
     juce::File lastDirectory_;
     std::vector<juce::File> lastFiles_;

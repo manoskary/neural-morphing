@@ -22,6 +22,12 @@ struct TokenBlock
     }
 };
 
+enum class TokenLayout
+{
+    CodebookMajor = 0,
+    FrameMajor
+};
+
 class ModelBackend
 {
 public:
@@ -32,6 +38,14 @@ public:
     virtual int sampleRate() const = 0;
     virtual int codebookCount() const = 0;
     virtual int embeddingDimension() const = 0;
+    virtual int requiredInputChannels() const { return 1; }
+    virtual double frameRateHz() const { return 0.0; }
+    virtual TokenLayout tokenLayout() const { return TokenLayout::CodebookMajor; }
+    virtual bool setCodec(const std::string& codecId)
+    {
+        (void) codecId;
+        return false;
+    }
 
     virtual TokenBlock encodePCM(const juce::AudioBuffer<float>& mono) = 0;
     virtual std::vector<float> tokensToVectorRow(const TokenBlock& block, int frameIndex) = 0;
