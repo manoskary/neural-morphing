@@ -28,6 +28,10 @@ public:
 
     TokenBlock encodePCM(const juce::AudioBuffer<float>& mono) override;
     std::vector<float> tokensToVectorRow(const TokenBlock& block, int frameIndex) override;
+    bool tokensToVectorRows(const TokenBlock& block,
+                            int startFrame,
+                            int frameCount,
+                            std::vector<std::vector<float>>& out) override;
     juce::AudioBuffer<float> decodeTokens(const TokenBlock& block) override;
 
     // HTTP backend specific methods

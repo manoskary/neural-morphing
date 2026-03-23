@@ -147,6 +147,9 @@ void PaletteWorker::processFiles()
             continue;
 
         index_.setTokenBlock(static_cast<int>(i), tokens);
+        std::vector<std::vector<float>> frameVectors;
+        const bool hasFrameVectors = backend_.tokensToVectorRows(tokens, 0, tokens.frames, frameVectors)
+                                     && static_cast<int>(frameVectors.size()) == tokens.frames;
 
         for (int frame = 0; frame + unit <= tokens.frames; frame += stride)
         {
@@ -156,7 +159,11 @@ void PaletteWorker::processFiles()
             bool valid = true;
             for (int offset = 0; offset < unit; ++offset)
             {
-                const auto vectorRow = backend_.tokensToVectorRow(tokens, frame + offset);
+                std::vector<float> vectorRow;
+                if (hasFrameVectors)
+                    vectorRow = frameVectors[static_cast<size_t>(frame + offset)];
+                else
+                    vectorRow = backend_.tokensToVectorRow(tokens, frame + offset);
                 if (static_cast<int>(vectorRow.size()) != index_.dimensions())
                 {
                     valid = false;

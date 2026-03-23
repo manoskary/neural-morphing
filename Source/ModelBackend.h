@@ -49,6 +49,30 @@ public:
 
     virtual TokenBlock encodePCM(const juce::AudioBuffer<float>& mono) = 0;
     virtual std::vector<float> tokensToVectorRow(const TokenBlock& block, int frameIndex) = 0;
+    virtual bool tokensToVectorRows(const TokenBlock& block,
+                                    int startFrame,
+                                    int frameCount,
+                                    std::vector<std::vector<float>>& out)
+    {
+        out.clear();
+        if (frameCount <= 0 || startFrame < 0 || startFrame >= block.frames)
+            return false;
+
+        const int endFrame = juce::jmin(block.frames, startFrame + frameCount);
+        out.reserve(static_cast<size_t>(juce::jmax(0, endFrame - startFrame)));
+        for (int frame = startFrame; frame < endFrame; ++frame)
+        {
+            auto row = tokensToVectorRow(block, frame);
+            if (row.empty())
+            {
+                out.clear();
+                return false;
+            }
+            out.push_back(std::move(row));
+        }
+
+        return !out.empty();
+    }
     virtual juce::AudioBuffer<float> decodeTokens(const TokenBlock& block) = 0;
 };
 

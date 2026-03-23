@@ -109,7 +109,12 @@ Environment variables (bridge):
 - `NEURAL_MORPHING_BRIDGE_CODEC` (default: `dac`)
 - `BRIDGE_WARM_START` (`0`/`1`, default: `0`)
 - `BRIDGE_ENABLE_STREAM_SESSIONS` (`0`/`1`, default: `0`, enables optional `/session/*` API)
+- `BRIDGE_DEVICE` (`auto`/`cpu`/`cuda`, default: `auto`)
 - `DAC_MODEL_NAME` (default: `descript/dac_44khz`)
+
+Environment variables (plugin realtime tuning):
+- `NEURAL_MORPHING_RT_UPDATE_MS` (override morph update interval in ms)
+- `NEURAL_MORPHING_RT_ENCODE_WINDOW_MS` (override rolling encode window in ms; useful for heavier codecs such as SpectroStream)
 
 For SpectroStream support, install Magenta RT and dependencies in your bridge environment:
 ```bash

@@ -36,6 +36,7 @@ DECODE_CHUNK_FRAMES = max(int(os.getenv("BRIDGE_DECODE_CHUNK_FRAMES", "1024")), 
 BRIDGE_CODEC_DEFAULT = os.getenv("NEURAL_MORPHING_BRIDGE_CODEC", "dac").strip().lower()
 BRIDGE_WARM_START = os.getenv("BRIDGE_WARM_START", "0").strip() in ("1", "true", "TRUE", "yes", "on")
 BRIDGE_ENABLE_STREAM_SESSIONS = os.getenv("BRIDGE_ENABLE_STREAM_SESSIONS", "0").strip() in ("1", "true", "TRUE", "yes", "on")
+FORCE_CPU_BACKENDS = False
 
 
 class EncodeRequest(BaseModel):
@@ -76,6 +77,22 @@ class TokensToVectorsRequest(BaseModel):
 class TokensToVectorsResponse(BaseModel):
     D: int
     vector: List[float]
+
+
+class TokensToVectorsBatchRequest(BaseModel):
+    B: int
+    T: int
+    tokens: List[int]
+    start_frame: int = 0
+    frame_count: int = 0
+    codebooks: Optional[int] = None
+    token_layout: str = TOKEN_LAYOUT_CODEBOOK_MAJOR
+
+
+class TokensToVectorsBatchResponse(BaseModel):
+    D: int
+    count: int
+    vectors: List[List[float]]
 
 
 class DecodeRequest(BaseModel):
@@ -260,6 +277,16 @@ class CodecAdapter:
     def tokens_to_vector_row(self, block: TokenBlock, frame_index: int) -> np.ndarray:
         raise NotImplementedError
 
+    def tokens_to_vector_rows(self, block: TokenBlock, start_frame: int, frame_count: int) -> np.ndarray:
+        if frame_count <= 0:
+            return np.zeros((0, 0), dtype=np.float32)
+        vectors: List[np.ndarray] = []
+        for frame_index in range(start_frame, start_frame + frame_count):
+            vectors.append(np.asarray(self.tokens_to_vector_row(block, frame_index), dtype=np.float32))
+        if not vectors:
+            return np.zeros((0, 0), dtype=np.float32)
+        return np.stack(vectors, axis=0).astype(np.float32, copy=False)
+
     def decode_tokens(self, block: TokenBlock) -> np.ndarray:
         raise NotImplementedError
 
@@ -355,21 +382,35 @@ class DacAdapter(CodecAdapter):
 
     @torch.inference_mode()
     def tokens_to_vector_row(self, block: TokenBlock, frame_index: int) -> np.ndarray:
+        vectors = self.tokens_to_vector_rows(block, frame_index, 1)
+        if vectors.shape[0] != 1:
+            raise ValueError("Failed to extract DAC vector row")
+        return vectors[0]
+
+    @torch.inference_mode()
+    def tokens_to_vector_rows(self, block: TokenBlock, start_frame: int, frame_count: int) -> np.ndarray:
         self.ensure_loaded()
         assert self._model is not None
 
-        if frame_index < 0 or frame_index >= block.T:
-            raise ValueError(f"Frame index {frame_index} out of range [0, {block.T})")
+        if start_frame < 0 or start_frame >= block.T:
+            raise ValueError(f"start_frame {start_frame} out of range [0, {block.T})")
+        if frame_count <= 0:
+            return np.zeros((0, self.metadata().embedding_dim), dtype=np.float32)
+
+        end_frame = min(block.T, start_frame + frame_count)
+        if end_frame <= start_frame:
+            return np.zeros((0, self.metadata().embedding_dim), dtype=np.float32)
+
         if block.B <= 0 or block.T <= 0 or block.codebooks <= 0:
             raise ValueError("Invalid token block dimensions")
         if len(block.tokens) != block.B * block.codebooks * block.T:
             raise ValueError("Token count is inconsistent with provided block dimensions")
 
         tokens_tensor = torch.as_tensor(block.tokens, dtype=torch.long).view(block.B, block.codebooks, block.T)
-        frame_tokens = tokens_tensor[:, :, frame_index : frame_index + 1].to(self._device)
+        frame_tokens = tokens_tensor[:, :, start_frame:end_frame].to(self._device)
         quantized_representation, _, _ = self._model.quantizer.from_codes(frame_tokens)
-        frame_vector = quantized_representation[:, :, 0]
-        return np.asarray(frame_vector.squeeze(0).detach().cpu(), dtype=np.float32)
+        vectors = np.asarray(quantized_representation.squeeze(0).transpose(0, 1).detach().cpu(), dtype=np.float32)
+        return np.ascontiguousarray(vectors, dtype=np.float32)
 
     @torch.inference_mode()
     def decode_tokens(self, block: TokenBlock) -> np.ndarray:
@@ -422,10 +463,16 @@ class SpectroStreamAdapter(CodecAdapter):
         self._codec = None
         self._audio_mod = None
         self._metadata: Optional[CodecMetadata] = None
+        self._rvq_codebooks: Optional[np.ndarray] = None
 
     def ensure_loaded(self) -> None:
         if self._codec is not None and self._audio_mod is not None and self._metadata is not None:
             return
+
+        if FORCE_CPU_BACKENDS:
+            os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+            os.environ.setdefault("JAX_PLATFORM_NAME", "cpu")
+            os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
         try:
             from magenta_rt import audio as mrt_audio
@@ -446,6 +493,7 @@ class SpectroStreamAdapter(CodecAdapter):
         self._codec = codec
         self._audio_mod = mrt_audio
         self._metadata = metadata
+        self._rvq_codebooks = np.asarray(codec.rvq_codebooks, dtype=np.float32)
         logger.info(
             "SpectroStream adapter ready (sample_rate=%s, channels=%s, codebooks=%s, embedding_dim=%s, frame_rate=%.2f)",
             metadata.sample_rate,
@@ -503,21 +551,38 @@ class SpectroStreamAdapter(CodecAdapter):
         return TokenBlock(B=1, T=T, codebooks=K, tokens=tokens)
 
     def tokens_to_vector_row(self, block: TokenBlock, frame_index: int) -> np.ndarray:
+        vectors = self.tokens_to_vector_rows(block, frame_index, 1)
+        if vectors.shape[0] != 1:
+            raise ValueError("Failed to extract SpectroStream vector row")
+        return vectors[0]
+
+    def tokens_to_vector_rows(self, block: TokenBlock, start_frame: int, frame_count: int) -> np.ndarray:
         self.ensure_loaded()
-        assert self._codec is not None
+        assert self._codec is not None and self._rvq_codebooks is not None
 
         if block.B != 1:
             raise ValueError("SpectroStream adapter currently supports batch size B=1")
-        if frame_index < 0 or frame_index >= block.T:
-            raise ValueError(f"Frame index {frame_index} out of range [0, {block.T})")
+        if start_frame < 0 or start_frame >= block.T:
+            raise ValueError(f"start_frame {start_frame} out of range [0, {block.T})")
+        if frame_count <= 0:
+            return np.zeros((0, self.metadata().embedding_dim), dtype=np.float32)
+
+        end_frame = min(block.T, start_frame + frame_count)
+        if end_frame <= start_frame:
+            return np.zeros((0, self.metadata().embedding_dim), dtype=np.float32)
 
         frame_major = _codebook_major_to_frame_major(block.tokens, block.codebooks, block.T)
-        frame_tokens = frame_major[frame_index]
-        codebooks = np.asarray(self._codec.rvq_codebooks, dtype=np.float32)
-        depth = min(frame_tokens.shape[0], codebooks.shape[0])
-        token_ids = np.asarray(frame_tokens[:depth], dtype=np.int32)
-        vector = codebooks[np.arange(depth), token_ids].sum(axis=0)
-        return np.asarray(vector, dtype=np.float32)
+        codebooks = self._rvq_codebooks
+        depth = min(frame_major.shape[1], codebooks.shape[0])
+        if depth <= 0:
+            return np.zeros((end_frame - start_frame, self.metadata().embedding_dim), dtype=np.float32)
+
+        token_ids = np.asarray(frame_major[start_frame:end_frame, :depth], dtype=np.int64)
+        if np.any(token_ids < 0) or np.any(token_ids >= codebooks.shape[1]):
+            raise ValueError("SpectroStream token id out of range for RVQ codebooks")
+
+        vectors = codebooks[np.arange(depth)[np.newaxis, :], token_ids].sum(axis=1)
+        return np.ascontiguousarray(vectors.astype(np.float32, copy=False))
 
     def decode_tokens(self, block: TokenBlock) -> np.ndarray:
         self.ensure_loaded()
@@ -710,7 +775,31 @@ def _token_block_from_request(
     return TokenBlock(B=B, T=T, codebooks=codebooks_final, tokens=tokens_list)
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def _can_use_cuda() -> bool:
+    if not torch.cuda.is_available():
+        return False
+    try:
+        _ = torch.zeros(1, device="cuda")
+        return True
+    except Exception as exc:
+        logger.warning("CUDA reported available but is unusable (%s); falling back to CPU.", exc)
+        return False
+
+
+def _select_torch_device() -> torch.device:
+    preference = os.getenv("BRIDGE_DEVICE", "auto").strip().lower()
+    if preference == "cpu":
+        return torch.device("cpu")
+    if preference == "cuda":
+        if _can_use_cuda():
+            return torch.device("cuda")
+        raise RuntimeError("BRIDGE_DEVICE=cuda requested but CUDA is unavailable/unusable")
+    return torch.device("cuda" if _can_use_cuda() else "cpu")
+
+
+device = _select_torch_device()
+logger.info("Bridge compute device: %s", device)
+FORCE_CPU_BACKENDS = device.type != "cuda"
 runtime = BridgeRuntime(device=device)
 
 app = FastAPI(title="Neural Morphing Bridge", version="2.0.0")
@@ -830,6 +919,40 @@ async def tokens_to_vectors_endpoint(request: TokensToVectorsRequest):
         return TokensToVectorsResponse(D=int(vector.shape[0]), vector=vector.astype(np.float32).tolist())
     except Exception as exc:
         logger.exception("Tokens to vectors error")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/tokens_to_vectors_batch", response_model=TokensToVectorsBatchResponse)
+async def tokens_to_vectors_batch_endpoint(request: TokensToVectorsBatchRequest):
+    try:
+        adapter = runtime.get_adapter(runtime.active_codec)
+        block = _token_block_from_request(
+            request.B,
+            request.T,
+            request.tokens,
+            codebooks=request.codebooks,
+            token_layout=request.token_layout,
+            adapter=adapter,
+        )
+
+        if request.start_frame < 0 or request.start_frame >= block.T:
+            raise ValueError(f"start_frame {request.start_frame} out of range [0, {block.T})")
+
+        requested_count = request.frame_count if request.frame_count > 0 else (block.T - request.start_frame)
+        end_frame = min(block.T, request.start_frame + requested_count)
+        matrix = adapter.tokens_to_vector_rows(block, request.start_frame, end_frame - request.start_frame)
+        if matrix.ndim != 2:
+            raise ValueError(f"Expected vector matrix [N, D], got shape={matrix.shape}")
+        vectors = matrix.astype(np.float32).tolist()
+        expected_dim = int(matrix.shape[1]) if matrix.shape[0] > 0 else 0
+
+        return TokensToVectorsBatchResponse(
+            D=expected_dim or 0,
+            count=len(vectors),
+            vectors=vectors,
+        )
+    except Exception as exc:
+        logger.exception("Tokens to vectors batch error")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

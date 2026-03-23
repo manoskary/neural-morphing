@@ -22,6 +22,22 @@ from transformers import AutoProcessor, DacModel
 
 
 class LatentGranularSynthesis:
+    @staticmethod
+    def _select_device(device):
+        if device is not None:
+            return torch.device(device)
+
+        if not torch.cuda.is_available():
+            return torch.device("cpu")
+
+        # Some systems expose CUDA but have an unsupported GPU architecture for the installed torch build.
+        try:
+            _ = torch.zeros(1, device="cuda")
+            return torch.device("cuda")
+        except Exception as exc:
+            print(f"CUDA reported available but is unusable ({exc}); falling back to CPU.")
+            return torch.device("cpu")
+
     def __init__(
         self,
         model_name="descript/dac_44khz",
@@ -30,8 +46,7 @@ class LatentGranularSynthesis:
         match_batch=2048,
     ):
         """Initialize with DAC model from HuggingFace."""
-        preferred_device = device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
-        self.device = torch.device(preferred_device)
+        self.device = self._select_device(device)
         self.compute_dtype = torch.float16 if self.device.type == "cuda" else torch.float32
         self.chunk_duration_s = max(chunk_duration_s, 1.0)
         self.match_batch = max(int(match_batch), 1)
@@ -723,31 +738,38 @@ class LatentGranularSynthesis:
         return self.sample_rate, scaled
 
 
-synth = LatentGranularSynthesis()
+_synth = None
+
+
+def _get_synth():
+    global _synth
+    if _synth is None:
+        _synth = LatentGranularSynthesis()
+    return _synth
 
 
 def build_dataset(files, aug_checkbox):
-    return synth.build_dataset(files, aug_checkbox)
+    return _get_synth().build_dataset(files, aug_checkbox)
 
 
 def morph_audio(target_file):
-    return synth.morph_audio(target_file)
+    return _get_synth().morph_audio(target_file)
 
 
 def temperature(temperature, threshold):
-    return synth.set_temperature(temperature, threshold)
+    return _get_synth().set_temperature(temperature, threshold)
 
 
 def unit(unit, stride):
-    return synth.set_unit(unit, stride)
+    return _get_synth().set_unit(unit, stride)
 
 
 def matching(continuity, rvq_focus):
-    return synth.set_matching(continuity, rvq_focus)
+    return _get_synth().set_matching(continuity, rvq_focus)
 
 
 def topk(top_k):
-    return synth.set_topk(top_k)
+    return _get_synth().set_topk(top_k)
 
 
 def _build_demo():
@@ -796,6 +818,7 @@ def _build_demo():
 
 
 def main():
+    _get_synth()
     demo = _build_demo()
     demo.launch(show_error=True)
 

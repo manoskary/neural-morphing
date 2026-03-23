@@ -114,6 +114,26 @@ class CodecContractTests(unittest.TestCase):
         self.assertGreater(data["T"], 0)
         self.assertEqual(data["codebooks"], 2)
 
+    def test_tokens_to_vectors_batch_schema(self):
+        response = self.client.post(
+            "/tokens_to_vectors_batch",
+            json={
+                "B": 1,
+                "T": 4,
+                "codebooks": 2,
+                "tokens": [0, 1, 2, 3, 4, 5, 6, 7],
+                "start_frame": 1,
+                "frame_count": 2,
+                "token_layout": server.TOKEN_LAYOUT_CODEBOOK_MAJOR,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["count"], 2)
+        self.assertEqual(data["D"], 4)
+        self.assertEqual(len(data["vectors"]), 2)
+        self.assertEqual(len(data["vectors"][0]), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

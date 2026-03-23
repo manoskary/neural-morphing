@@ -86,6 +86,9 @@ private:
     void initialiseBackend();
     void shutdownWorkers();
     void createWorkers();
+    void configureRealtimeTimings();
+    void pushRealtimeInputHistory(const juce::AudioBuffer<float>& inputBlock);
+    const juce::AudioBuffer<float>& selectRealtimeEncodeInput(const juce::AudioBuffer<float>& currentBlock) const;
 
     std::unique_ptr<ModelBackend> backend_;
     std::unique_ptr<PaletteIndex> paletteIndex_;
@@ -95,6 +98,7 @@ private:
 
     OnsetDetector onsetDetector_;
     juce::AudioBuffer<float> backendInputScratch_;
+    juce::AudioBuffer<float> realtimeInputHistory_;
     juce::AudioBuffer<float> morphScratch_;
 
     double currentSampleRate_ = 44100.0;
@@ -113,10 +117,17 @@ private:
 
     std::vector<MorphCacheEntry> morphCache_;
     static constexpr std::size_t maxMorphCacheEntries_ = 8;
+    int morphUpdateIntervalMs_ = 40;
+    int realtimeEncodeWindowMs_ = 0;
+    int realtimeEncodeWindowSamples_ = 0;
+    int realtimeInputFilledSamples_ = 0;
     std::vector<float> morphSmoothingState_;
     mutable juce::SpinLock morphCacheMutex_;
     std::atomic<bool> resetSmoothingPending_{ false };
     int lastMatchedIndex_ = -1;
+    int morphUpdateCountdownSamples_ = 0;
+    juce::AudioBuffer<float> lastRealtimeMorphBlock_;
+    bool hasLastRealtimeMorphBlock_ = false;
 
     mutable juce::CriticalSection standaloneMutex_;
     juce::AudioBuffer<float> standaloneSourceBuffer_;

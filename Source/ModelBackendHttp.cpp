@@ -354,6 +354,64 @@ std::vector<float> ModelBackendHttp::tokensToVectorRow(const TokenBlock& block, 
     return {};
 }
 
+bool ModelBackendHttp::tokensToVectorRows(const TokenBlock& block,
+                                          int startFrame,
+                                          int frameCount,
+                                          std::vector<std::vector<float>>& out)
+{
+    out.clear();
+    if (!ready_.load() || frameCount <= 0 || startFrame < 0 || startFrame >= block.frames || block.tokens.empty())
+        return false;
+
+    juce::DynamicObject::Ptr requestObj = new juce::DynamicObject();
+    requestObj->setProperty("B", block.batchSize);
+    requestObj->setProperty("T", block.frames);
+    requestObj->setProperty("codebooks", block.codebooks);
+    requestObj->setProperty("token_layout", tokenLayoutToString(TokenLayout::CodebookMajor));
+    requestObj->setProperty("start_frame", startFrame);
+    requestObj->setProperty("frame_count", frameCount);
+
+    juce::Array<juce::var> tokensArray;
+    for (const auto token : block.tokens)
+        tokensArray.add(token);
+    requestObj->setProperty("tokens", tokensArray);
+
+    auto response = makeHttpRequest("/tokens_to_vectors_batch", "POST", juce::JSON::toString(requestObj.get()));
+    if (response.success)
+    {
+        auto responseObj = juce::JSON::parse(response.body);
+        if (auto* obj = responseObj.getDynamicObject())
+        {
+            auto* vectorsArray = obj->getProperty("vectors").getArray();
+            if (vectorsArray != nullptr && vectorsArray->size() > 0)
+            {
+                out.reserve(static_cast<size_t>(vectorsArray->size()));
+                for (int i = 0; i < vectorsArray->size(); ++i)
+                {
+                    auto* rowArray = vectorsArray->getUnchecked(i).getArray();
+                    if (rowArray == nullptr || rowArray->size() <= 0)
+                    {
+                        out.clear();
+                        break;
+                    }
+
+                    std::vector<float> row;
+                    row.reserve(static_cast<size_t>(rowArray->size()));
+                    for (int j = 0; j < rowArray->size(); ++j)
+                        row.push_back(static_cast<float>(rowArray->getUnchecked(j)));
+                    out.push_back(std::move(row));
+                }
+
+                if (!out.empty())
+                    return true;
+            }
+        }
+    }
+
+    // Fallback for older bridge versions without batch endpoint support.
+    return ModelBackend::tokensToVectorRows(block, startFrame, frameCount, out);
+}
+
 juce::AudioBuffer<float> ModelBackendHttp::decodeTokens(const TokenBlock& block)
 {
     if (!ready_.load() || block.tokens.empty())
