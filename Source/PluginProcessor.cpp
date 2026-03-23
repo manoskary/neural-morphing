@@ -16,7 +16,7 @@ namespace
 constexpr int monoScratchReserve = 8192;
 constexpr int matchCandidateCount = 96;
 constexpr int matchBeamWidth = 12;
-constexpr int topKMixCount = 4;
+constexpr int topKMixCount = 7;
 
 struct RvqGroups
 {
@@ -110,6 +110,8 @@ void NeuralMorphingAudioProcessor::prepareToPlay(double sampleRate, int samplesP
     morphUpdateCountdownSamples_ = 0;
     hasLastRealtimeMorphBlock_ = false;
     lastRealtimeMorphBlock_.setSize(0, 0);
+    lastRealtimeMorphReadPosition_ = 0;
+    outputSafetyGain_ = 1.0f;
 
     onsetDetector_.prepare(sampleRate, 512, 256);
     onsetDetector_.reset();
@@ -159,6 +161,15 @@ void NeuralMorphingAudioProcessor::configureRealtimeTimings()
     }
     realtimeInputHistory_.clear();
     realtimeInputFilledSamples_ = 0;
+
+    const juce::ScopedLock taskLock(realtimeTaskMutex_);
+    if (pendingRealtimeEncodeInput_.getNumChannels() != requiredChannels
+        || pendingRealtimeEncodeInput_.getNumSamples() != realtimeEncodeWindowSamples_)
+    {
+        pendingRealtimeEncodeInput_.setSize(requiredChannels, realtimeEncodeWindowSamples_, false, false, true);
+    }
+    pendingRealtimeEncodeInput_.clear();
+    hasPendingRealtimeTask_ = false;
 }
 
 void NeuralMorphingAudioProcessor::pushRealtimeInputHistory(const juce::AudioBuffer<float>& inputBlock)
@@ -236,14 +247,20 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
     {
         targetSegments_.clear();
         hasLastRealtimeMorphBlock_ = false;
+        lastRealtimeMorphReadPosition_ = 0;
         morphUpdateCountdownSamples_ = 0;
+        decodedFifo_.clear();
         realtimeInputHistory_.clear();
         realtimeInputFilledSamples_ = 0;
         resetMorphSmoothing();
-        lastMatchedIndex_ = -1;
+        lastMatchedIndex_.store(-1, std::memory_order_release);
+        const juce::ScopedLock taskLock(realtimeTaskMutex_);
+        hasPendingRealtimeTask_ = false;
+        pendingRealtimeEncodeInput_.clear();
 
         const float outputGain = juce::Decibels::decibelsToGain(getParam("outputGain"));
         buffer.applyGain(outputGain);
+        applySafetyLimiter(buffer);
         return;
     }
 
@@ -278,21 +295,26 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
             if (isSilent(backendInputScratch_))
                 targetSegments_.clear();
             hasLastRealtimeMorphBlock_ = false;
+            lastRealtimeMorphReadPosition_ = 0;
+            decodedFifo_.clear();
             realtimeInputHistory_.clear();
             realtimeInputFilledSamples_ = 0;
             resetMorphSmoothing();
-            lastMatchedIndex_ = -1;
+            lastMatchedIndex_.store(-1, std::memory_order_release);
             morphUpdateCountdownSamples_ = 0;
+            const juce::ScopedLock taskLock(realtimeTaskMutex_);
+            hasPendingRealtimeTask_ = false;
+            pendingRealtimeEncodeInput_.clear();
         }
         else
         {
             if (!isSilent(backendInputScratch_))
             {
-                bool shouldUpdateMorph = true;
+                bool shouldQueueMorph = true;
                 if (morphUpdateCountdownSamples_ > 0)
                 {
                     morphUpdateCountdownSamples_ = juce::jmax(0, morphUpdateCountdownSamples_ - numSamples);
-                    shouldUpdateMorph = false;
+                    shouldQueueMorph = false;
                 }
                 else if (currentSampleRate_ > 0.0)
                 {
@@ -301,95 +323,50 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
                         static_cast<int>(currentSampleRate_ * (static_cast<double>(morphUpdateIntervalMs_) / 1000.0)));
                 }
 
-                if (!shouldUpdateMorph)
+                if (shouldQueueMorph)
                 {
-                    if (hasLastRealtimeMorphBlock_ && lastRealtimeMorphBlock_.getNumSamples() > 0)
-                        mixMorphedAudio(buffer, dryBuffer, lastRealtimeMorphBlock_);
-                    const float outputGain = juce::Decibels::decibelsToGain(getParam("outputGain"));
-                    buffer.applyGain(outputGain);
-                    return;
+                    // Avoid querying while the palette is actively rebuilding.
+                    if (paletteWorker_ == nullptr || !paletteWorker_->isBusy())
+                    {
+                        const auto& encodeInput = selectRealtimeEncodeInput(backendInputScratch_);
+                        queueRealtimeMorphTask(encodeInput);
+                    }
                 }
 
-                const auto& encodeInput = selectRealtimeEncodeInput(backendInputScratch_);
-                auto targetTokens = backend_->encodePCM(encodeInput);
-                if (!targetTokens.tokens.empty() && targetTokens.frames > 0)
+                juce::AudioBuffer<float> latestMorphed;
+                while (decodedFifo_.pop(latestMorphed))
                 {
-                    if (targetSegments_.size() >= maxTargetSegments_)
-                        targetSegments_.erase(targetSegments_.begin());
-
-                    targetSegments_.push_back(targetTokens);
-
-                    const uint64_t cacheKey = hashMorphKey(targetTokens);
-                    juce::AudioBuffer<float> cachedAudio;
-                    bool hasCachedAudio = false;
-                    {
-                        const juce::SpinLock::ScopedLockType lock(morphCacheMutex_);
-                        for (size_t i = 0; i < morphCache_.size(); ++i)
-                        {
-                            if (morphCache_[i].hash == cacheKey)
-                            {
-                                if (i > 0)
-                                {
-                                    auto entry = std::move(morphCache_[i]);
-                                    morphCache_.erase(morphCache_.begin() + static_cast<long>(i));
-                                    morphCache_.insert(morphCache_.begin(), std::move(entry));
-                                }
-                                if (morphCache_.front().audio.getNumSamples() > 0)
-                                {
-                                    cachedAudio.makeCopyOf(morphCache_.front().audio);
-                                    hasCachedAudio = true;
-                                }
-                                break;
-                            }
-                        }
-                    }
-
-                    if (hasCachedAudio)
-                    {
-                        mixMorphedAudio(buffer, dryBuffer, cachedAudio);
-                        lastRealtimeMorphBlock_.makeCopyOf(cachedAudio);
-                        hasLastRealtimeMorphBlock_ = true;
-                    }
-                    else
-                    {
-                        auto matchedTokens = buildMatchedTokenBlock(targetTokens);
-                        if (!matchedTokens.tokens.empty() && matchedTokens.frames > 0)
-                        {
-                            auto morphedAudio = backend_->decodeTokens(matchedTokens);
-                            mixMorphedAudio(buffer, dryBuffer, morphedAudio);
-                            lastRealtimeMorphBlock_.makeCopyOf(morphedAudio);
-                            hasLastRealtimeMorphBlock_ = true;
-
-                            MorphCacheEntry entry;
-                            entry.hash = cacheKey;
-                            entry.matchedTokens = std::move(matchedTokens);
-                            entry.audio = std::move(morphedAudio);
-                            {
-                                const juce::SpinLock::ScopedLockType lock(morphCacheMutex_);
-                                morphCache_.insert(morphCache_.begin(), std::move(entry));
-
-                                if (morphCache_.size() > maxMorphCacheEntries_)
-                                    morphCache_.pop_back();
-                            }
-                        }
-                    }
+                    if (latestMorphed.getNumChannels() <= 0 || latestMorphed.getNumSamples() <= 0)
+                        continue;
+                    lastRealtimeMorphBlock_.makeCopyOf(latestMorphed);
+                    hasLastRealtimeMorphBlock_ = true;
+                    lastRealtimeMorphReadPosition_ = 0;
                 }
+
+                if (hasLastRealtimeMorphBlock_ && lastRealtimeMorphBlock_.getNumSamples() > 0)
+                    mixMorphedAudio(buffer, dryBuffer, lastRealtimeMorphBlock_);
             }
             else
             {
                 targetSegments_.clear();
                 hasLastRealtimeMorphBlock_ = false;
+                lastRealtimeMorphReadPosition_ = 0;
+                decodedFifo_.clear();
                 realtimeInputHistory_.clear();
                 realtimeInputFilledSamples_ = 0;
                 resetMorphSmoothing();
-                lastMatchedIndex_ = -1;
+                lastMatchedIndex_.store(-1, std::memory_order_release);
                 morphUpdateCountdownSamples_ = 0;
+                const juce::ScopedLock taskLock(realtimeTaskMutex_);
+                hasPendingRealtimeTask_ = false;
+                pendingRealtimeEncodeInput_.clear();
             }
         }
     }
 
     const float outputGain = juce::Decibels::decibelsToGain(getParam("outputGain"));
     buffer.applyGain(outputGain);
+    applySafetyLimiter(buffer);
 }
 
 juce::AudioProcessorEditor* NeuralMorphingAudioProcessor::createEditor()
@@ -460,11 +437,16 @@ void NeuralMorphingAudioProcessor::invalidateMorphCache()
     morphCache_.clear();
     hasLastRealtimeMorphBlock_ = false;
     lastRealtimeMorphBlock_.setSize(0, 0);
+    lastRealtimeMorphReadPosition_ = 0;
     morphUpdateCountdownSamples_ = 0;
     realtimeInputHistory_.clear();
     realtimeInputFilledSamples_ = 0;
-    lastMatchedIndex_ = -1;
+    lastMatchedIndex_.store(-1, std::memory_order_release);
     resetSmoothingPending_.store(true, std::memory_order_release);
+    decodedFifo_.clear();
+    const juce::ScopedLock taskLock(realtimeTaskMutex_);
+    hasPendingRealtimeTask_ = false;
+    pendingRealtimeEncodeInput_.clear();
 }
 
 bool NeuralMorphingAudioProcessor::isStandaloneWrapper() const
@@ -553,6 +535,7 @@ uint64_t NeuralMorphingAudioProcessor::hashMorphKey(const TokenBlock& block) con
     mix(static_cast<uint64_t>(std::lround(getParam("threshold") * 1000.0f)));
     mix(static_cast<uint64_t>(std::lround(getParam("continuity") * 1000.0f)));
     mix(static_cast<uint64_t>(std::lround(getParam("rvqFocus") * 1000.0f)));
+    mix(static_cast<uint64_t>(std::lround(getParam("swapMode"))));
 
     return hash;
 }
@@ -562,12 +545,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralMorphingAudioProcessor
     using R = juce::NormalisableRange<float>;
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("temperature", "Temperature", R(0.1f, 2.0f, 0.01f), 1.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("threshold", "Threshold", R(0.1f, 2.0f, 0.01f), 1.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("continuity", "Continuity", R(0.0f, 1.0f, 0.01f), 0.3f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("rvqFocus", "RVQ Focus", R(0.0f, 1.0f, 0.01f), 0.5f));
-    params.push_back(std::make_unique<juce::AudioParameterInt>("unit", "Unit", 1, 10, 2));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("temperature", "Temperature", R(0.1f, 2.0f, 0.01f), 0.47f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("threshold", "Threshold", R(0.1f, 2.0f, 0.01f), 0.55f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("continuity", "Continuity", R(0.0f, 1.0f, 0.01f), 0.93f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("rvqFocus", "RVQ Focus", R(0.0f, 1.0f, 0.01f), 0.30f));
+    params.push_back(std::make_unique<juce::AudioParameterInt>("unit", "Unit", 1, 10, 7));
     params.push_back(std::make_unique<juce::AudioParameterInt>("stride", "Stride", 1, 10, 2));
+    juce::StringArray swapModeChoices;
+    swapModeChoices.add("Full Layer");
+    swapModeChoices.add("RVQ Group");
+    params.push_back(std::make_unique<juce::AudioParameterChoice>("swapMode", "Swap Mode", swapModeChoices, 0));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("similarity", "Similarity", R(0.0f, 1.0f, 0.01f), 0.8f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("envelopeFollow", "Envelope Follow", R(0.0f, 1.0f, 0.01f), 0.7f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("dryWet", "Dry/Wet", R(0.0f, 1.0f, 0.01f), 1.0f));
@@ -600,6 +587,40 @@ void NeuralMorphingAudioProcessor::mixWetBuffer(juce::AudioBuffer<float>& buffer
     juce::ignoreUnused(buffer, dryBuffer);
 }
 
+void NeuralMorphingAudioProcessor::applySafetyLimiter(juce::AudioBuffer<float>& buffer)
+{
+    const int numChannels = buffer.getNumChannels();
+    const int numSamples = buffer.getNumSamples();
+    if (numChannels <= 0 || numSamples <= 0)
+        return;
+
+    float peak = 0.0f;
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        const auto* data = buffer.getReadPointer(ch);
+        for (int i = 0; i < numSamples; ++i)
+            peak = std::max(peak, std::abs(data[i]));
+    }
+
+    constexpr float targetPeak = 0.98f;
+    const float desiredGain = (peak > targetPeak && peak > 0.0f) ? (targetPeak / peak) : 1.0f;
+    const float attack = 0.35f;
+    const float release = 0.02f;
+    const float coeff = (desiredGain < outputSafetyGain_) ? attack : release;
+    outputSafetyGain_ += coeff * (desiredGain - outputSafetyGain_);
+    outputSafetyGain_ = juce::jlimit(0.05f, 1.0f, outputSafetyGain_);
+
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        auto* data = buffer.getWritePointer(ch);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float limited = data[i] * outputSafetyGain_;
+            data[i] = juce::jlimit(-0.995f, 0.995f, limited);
+        }
+    }
+}
+
 TokenBlock NeuralMorphingAudioProcessor::buildMatchedTokenBlock(const TokenBlock& targetBlock)
 {
     TokenBlock result;
@@ -614,6 +635,8 @@ TokenBlock NeuralMorphingAudioProcessor::buildMatchedTokenBlock(const TokenBlock
 
     const int unit = juce::jmax(1, static_cast<int>(getParam("unit")));
     const int stride = juce::jmax(1, static_cast<int>(getParam("stride")));
+    const int swapMode = juce::jlimit(0, 1, static_cast<int>(std::lround(getParam("swapMode"))));
+    const bool useFullLayerSwap = (swapMode == 0);
 
     if (targetBlock.frames < unit)
         return result;
@@ -789,8 +812,9 @@ TokenBlock NeuralMorphingAudioProcessor::buildMatchedTokenBlock(const TokenBlock
     {
         const auto& candidate = grains.front().candidates[i];
         float score = candidate.emission;
-        if (continuity > 0.0f && lastMatchedIndex_ >= 0)
-            score += continuity * transitionCost(lastMatchedIndex_, candidate.annIndex);
+        const int previousMatch = lastMatchedIndex_.load(std::memory_order_acquire);
+        if (continuity > 0.0f && previousMatch >= 0)
+            score += continuity * transitionCost(previousMatch, candidate.annIndex);
         beam.push_back({ score, static_cast<int>(i), -1 });
     }
 
@@ -862,13 +886,44 @@ TokenBlock NeuralMorphingAudioProcessor::buildMatchedTokenBlock(const TokenBlock
             continue;
 
         const auto& best = grain.candidates[static_cast<size_t>(candidateIdx)];
-        lastMatchedIndex_ = best.annIndex;
+        lastMatchedIndex_.store(best.annIndex, std::memory_order_release);
         const bool fallbackCoarse = best.emission > threshold;
 
         const int startFrame = grain.startFrame;
         const int span = juce::jmin(unit, result.frames - startFrame);
         if (span <= 0)
             continue;
+        const auto& bestMeta = paletteIndex_->meta(best.annIndex);
+        const TokenBlock* bestBlock = paletteIndex_->tokensForMeta(bestMeta);
+
+        if (useFullLayerSwap)
+        {
+            if (fallbackCoarse)
+                continue;
+
+            for (int q = 0; q < codebooks; ++q)
+            {
+                for (int offset = 0; offset < span; ++offset)
+                {
+                    int tokenValue = 0;
+                    if (bestBlock != nullptr && bestMeta.frame + offset < bestBlock->frames)
+                    {
+                        const int srcIdx = bestBlock->index(q, bestMeta.frame + offset);
+                        if (srcIdx >= 0 && static_cast<size_t>(srcIdx) < bestBlock->tokens.size())
+                            tokenValue = bestBlock->tokens[static_cast<size_t>(srcIdx)];
+                    }
+                    else
+                    {
+                        const int fallbackIdx = targetBlock.index(q, startFrame + offset);
+                        if (fallbackIdx >= 0 && static_cast<size_t>(fallbackIdx) < targetBlock.tokens.size())
+                            tokenValue = targetBlock.tokens[static_cast<size_t>(fallbackIdx)];
+                    }
+
+                    result.tokens[static_cast<size_t>(result.index(q, startFrame + offset))] = tokenValue;
+                }
+            }
+            continue;
+        }
 
         const int kCount = std::min(topKMixCount, static_cast<int>(grain.candidates.size()));
         std::vector<int> topIndices;
@@ -906,9 +961,6 @@ TokenBlock NeuralMorphingAudioProcessor::buildMatchedTokenBlock(const TokenBlock
                     w /= sum;
             }
         }
-
-        const auto& bestMeta = paletteIndex_->meta(best.annIndex);
-        const TokenBlock* bestBlock = paletteIndex_->tokensForMeta(bestMeta);
 
         for (int q = 0; q < codebooks; ++q)
         {
@@ -1023,7 +1075,8 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
     if (morphSmoothingState_.size() < static_cast<size_t>(totalNumOutputChannels))
         morphSmoothingState_.assign(static_cast<size_t>(totalNumOutputChannels), 0.0f);
 
-    const int copySamples = juce::jmin(numSamples, morphed.getNumSamples());
+    const int morphSamples = morphed.getNumSamples();
+    const int readStart = juce::jlimit(0, juce::jmax(0, morphSamples), lastRealtimeMorphReadPosition_);
 
     for (int ch = 0; ch < totalNumOutputChannels; ++ch)
     {
@@ -1031,10 +1084,13 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
         const int dryCh = juce::jmin(ch, dryBuffer.getNumChannels() - 1);
         float prevSmoothed = morphSmoothingState_[static_cast<size_t>(ch)];
 
-        for (int sample = 0; sample < copySamples; ++sample)
+        for (int sample = 0; sample < numSamples; ++sample)
         {
             const float drySample = dryBuffer.getSample(dryCh, sample);
-            float morphSample = morphed.getSample(morphCh, sample);
+            const int morphLinearIndex = readStart + sample;
+            float morphSample = drySample;
+            if (morphLinearIndex < morphSamples)
+                morphSample = morphed.getSample(morphCh, morphLinearIndex);
             if (useSmoothing)
             {
                 morphSample = (1.0f - smoothingAlpha) * morphSample + smoothingAlpha * prevSmoothed;
@@ -1054,14 +1110,10 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
 
         if (useSmoothing)
             morphSmoothingState_[static_cast<size_t>(ch)] = prevSmoothed;
-
-        for (int sample = copySamples; sample < numSamples; ++sample)
-        {
-            const float drySample = dryBuffer.getSample(dryCh, sample);
-            const float outputSample = dryWet * drySample + (1.0f - dryWet) * drySample;
-            buffer.setSample(ch, sample, outputSample);
-        }
     }
+
+    if (morphSamples > 0)
+        lastRealtimeMorphReadPosition_ = juce::jmin(readStart + numSamples, morphSamples);
 }
 
 bool NeuralMorphingAudioProcessor::paletteReady() const
@@ -1101,6 +1153,8 @@ bool NeuralMorphingAudioProcessor::isSilent(const juce::AudioBuffer<float>& buff
 
 void NeuralMorphingAudioProcessor::shutdownWorkers()
 {
+    stopRealtimeWorker();
+
     if (paletteWorker_ != nullptr)
     {
         paletteWorker_->shutdown();
@@ -1140,6 +1194,137 @@ void NeuralMorphingAudioProcessor::createWorkers()
     {
         if (!paletteWorker_->isThreadRunning())
             paletteWorker_->startThread();
+    }
+
+    startRealtimeWorker();
+}
+
+void NeuralMorphingAudioProcessor::startRealtimeWorker()
+{
+    if (realtimeWorkerThread_.joinable())
+        return;
+
+    realtimeWorkerShouldExit_.store(false, std::memory_order_release);
+    realtimeWorkerThread_ = std::thread([this] { realtimeWorkerLoop(); });
+}
+
+void NeuralMorphingAudioProcessor::stopRealtimeWorker()
+{
+    realtimeWorkerShouldExit_.store(true, std::memory_order_release);
+    realtimeWorkerWake_.signal();
+    if (realtimeWorkerThread_.joinable())
+        realtimeWorkerThread_.join();
+
+    const juce::ScopedLock taskLock(realtimeTaskMutex_);
+    hasPendingRealtimeTask_ = false;
+    pendingRealtimeEncodeInput_.clear();
+}
+
+void NeuralMorphingAudioProcessor::queueRealtimeMorphTask(const juce::AudioBuffer<float>& encodeInput)
+{
+    if (realtimeWorkerShouldExit_.load(std::memory_order_acquire))
+        return;
+
+    const juce::ScopedLock taskLock(realtimeTaskMutex_);
+    if (pendingRealtimeEncodeInput_.getNumChannels() != encodeInput.getNumChannels()
+        || pendingRealtimeEncodeInput_.getNumSamples() != encodeInput.getNumSamples())
+    {
+        pendingRealtimeEncodeInput_.setSize(encodeInput.getNumChannels(), encodeInput.getNumSamples(), false, false, true);
+    }
+    pendingRealtimeEncodeInput_.makeCopyOf(encodeInput, true);
+    hasPendingRealtimeTask_ = true;
+    realtimeWorkerWake_.signal();
+}
+
+void NeuralMorphingAudioProcessor::realtimeWorkerLoop()
+{
+    while (!realtimeWorkerShouldExit_.load(std::memory_order_acquire))
+    {
+        realtimeWorkerWake_.wait(100);
+        if (realtimeWorkerShouldExit_.load(std::memory_order_acquire))
+            break;
+
+        juce::AudioBuffer<float> encodeInput;
+        {
+            const juce::ScopedLock taskLock(realtimeTaskMutex_);
+            if (!hasPendingRealtimeTask_)
+                continue;
+            encodeInput.makeCopyOf(pendingRealtimeEncodeInput_, true);
+            hasPendingRealtimeTask_ = false;
+        }
+
+        processRealtimeMorphTask(encodeInput);
+    }
+}
+
+void NeuralMorphingAudioProcessor::processRealtimeMorphTask(juce::AudioBuffer<float>& encodeInput)
+{
+    if (paletteWorker_ != nullptr && paletteWorker_->isBusy())
+        return;
+
+    if (backend_ == nullptr || !backend_->ready() || !paletteReady())
+        return;
+
+    auto targetTokens = backend_->encodePCM(encodeInput);
+    if (targetTokens.tokens.empty() || targetTokens.frames <= 0)
+        return;
+
+    const uint64_t cacheKey = hashMorphKey(targetTokens);
+    juce::AudioBuffer<float> morphedAudio;
+    bool hasMorphedAudio = false;
+
+    {
+        const juce::SpinLock::ScopedLockType lock(morphCacheMutex_);
+        for (size_t i = 0; i < morphCache_.size(); ++i)
+        {
+            if (morphCache_[i].hash != cacheKey)
+                continue;
+
+            if (i > 0)
+            {
+                auto entry = std::move(morphCache_[i]);
+                morphCache_.erase(morphCache_.begin() + static_cast<long>(i));
+                morphCache_.insert(morphCache_.begin(), std::move(entry));
+            }
+
+            if (morphCache_.front().audio.getNumSamples() > 0)
+            {
+                morphedAudio.makeCopyOf(morphCache_.front().audio);
+                hasMorphedAudio = true;
+            }
+            break;
+        }
+    }
+
+    if (!hasMorphedAudio)
+    {
+        if (paletteWorker_ != nullptr && paletteWorker_->isBusy())
+            return;
+
+        auto matchedTokens = buildMatchedTokenBlock(targetTokens);
+        if (matchedTokens.tokens.empty() || matchedTokens.frames <= 0)
+            return;
+
+        morphedAudio = backend_->decodeTokens(matchedTokens);
+        if (morphedAudio.getNumChannels() <= 0 || morphedAudio.getNumSamples() <= 0)
+            return;
+
+        MorphCacheEntry entry;
+        entry.hash = cacheKey;
+        entry.matchedTokens = std::move(matchedTokens);
+        entry.audio = morphedAudio;
+
+        const juce::SpinLock::ScopedLockType lock(morphCacheMutex_);
+        morphCache_.insert(morphCache_.begin(), std::move(entry));
+        if (morphCache_.size() > maxMorphCacheEntries_)
+            morphCache_.pop_back();
+    }
+
+    if (!decodedFifo_.push(std::move(morphedAudio)))
+    {
+        juce::AudioBuffer<float> dropped;
+        decodedFifo_.pop(dropped);
+        decodedFifo_.push(std::move(morphedAudio));
     }
 }
 

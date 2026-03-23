@@ -123,6 +123,15 @@ pip install magenta_rt
 
 ## Evaluation Harness
 
+Current tuned defaults (used by app/standalone + Python demo):
+- `temperature=0.47`
+- `threshold=0.55`
+- `continuity=0.93`
+- `rvq_focus=0.30`
+- `unit=7`
+- `stride=2`
+- `top_k=7`
+
 Prepare a deterministic manifest:
 ```bash
 python tools/evaluate_morphing.py prepare \

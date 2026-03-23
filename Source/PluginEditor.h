@@ -95,9 +95,12 @@ private:
     juce::Label backendLabel_{ "Backend", "Backend:" };
     juce::ComboBox bridgeCodecSelector_;
     juce::Label bridgeCodecLabel_{ "BridgeCodec", "Codec:" };
+    juce::ComboBox swapModeSelector_;
+    juce::Label swapModeLabel_{ "SwapMode", "Swap:" };
     juce::Label statusDisplayLabel_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> backendAttachment_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> bridgeCodecAttachment_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> swapModeAttachment_;
 
     juce::File lastDirectory_;
     std::vector<juce::File> lastFiles_;

@@ -10,6 +10,7 @@ import contextlib
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import gradio as gr
 import librosa
@@ -45,33 +46,44 @@ class LatentGranularSynthesis:
         chunk_duration_s=8.0,
         match_batch=2048,
     ):
-        """Initialize with DAC model from HuggingFace."""
+        """Initialize multi-codec morphing stack (DAC + optional SpectroStream)."""
         self.device = self._select_device(device)
         self.compute_dtype = torch.float16 if self.device.type == "cuda" else torch.float32
         self.chunk_duration_s = max(chunk_duration_s, 1.0)
         self.match_batch = max(int(match_batch), 1)
+        self.model_name = model_name
 
-        self.model = DacModel.from_pretrained(model_name)
-        self.model.to(self.device)
-        self.model.eval()
-        self.processor = AutoProcessor.from_pretrained(model_name)
+        self.model = None
+        self.processor = None
+        self.sample_rate = 44100
+        self.required_input_channels = 1
+        self.codec_id = "dac"
+        self.supported_codecs = ["dac"]
 
-        self.sample_rate = self.processor.sampling_rate
-        print(f"Using DAC model: {model_name}")
-        print(f"Sample rate: {self.sample_rate} Hz")
-        print(f"Compute device: {self.device}")
+        self.spectro_codec = None
+        self.spectro_audio_mod = None
+        self.spectro_codebooks = None
 
-        self.unit = 2
+        try:
+            from magenta_rt import audio as _mrt_audio  # noqa: F401
+            from magenta_rt import spectrostream as _mrt_spectrostream  # noqa: F401
+            self.supported_codecs.append("spectrostream")
+        except Exception:
+            pass
+
+        self._load_dac()
+
+        self.unit = 7
         self.stride = 2
-        self.temperature = 0.5
-        self.threshold = 1.0
-        self.continuity = 0.3
-        self.rvq_focus = 0.5
-        self.top_k = 4
+        self.temperature = 0.47
+        self.threshold = 0.55
+        self.continuity = 0.93
+        self.rvq_focus = 0.30
+        self.top_k = 7
         self.candidate_count = 96
         self.beam_width = 12
         self.match_mode = "beam"
-        self.swap_mode = "rvq_group"
+        self.swap_mode = "full_layer"
         self.last_timings = {"encode_ms": 0.0, "decode_ms": 0.0, "total_ms": 0.0}
 
         self.files = None
@@ -87,6 +99,82 @@ class LatentGranularSynthesis:
         self.palette_file_ids = None
         self.palette_frame_indices = None
         self.prev_best_index = None
+
+        print(f"Sample rate: {self.sample_rate} Hz")
+        print(f"Compute device: {self.device}")
+        print(f"Supported codecs: {', '.join(self.supported_codecs)}")
+
+    def _load_dac(self):
+        if self.model is not None and self.processor is not None:
+            self.codec_id = "dac"
+            self.sample_rate = int(self.processor.sampling_rate)
+            self.required_input_channels = 1
+            self.codebook_embeddings = None
+            print("Using codec: dac")
+            return
+
+        self.model = DacModel.from_pretrained(self.model_name)
+        self.model.to(self.device)
+        self.model.eval()
+        self.processor = AutoProcessor.from_pretrained(self.model_name)
+        self.codec_id = "dac"
+        self.sample_rate = int(self.processor.sampling_rate)
+        self.required_input_channels = 1
+        self.codebook_embeddings = None
+        print(f"Using DAC model: {self.model_name}")
+        print("Using codec: dac")
+
+    def _load_spectrostream(self):
+        if self.spectro_codec is not None and self.spectro_audio_mod is not None:
+            self.codec_id = "spectrostream"
+            self.sample_rate = int(self.spectro_codec.sample_rate)
+            self.required_input_channels = int(self.spectro_codec.num_channels)
+            if self.spectro_codebooks is not None:
+                self.codebook_embeddings = [
+                    torch.from_numpy(self.spectro_codebooks[q]).to(torch.float32)
+                    for q in range(self.spectro_codebooks.shape[0])
+                ]
+            print("Using codec: spectrostream")
+            return
+
+        from magenta_rt import audio as mrt_audio
+        from magenta_rt import spectrostream
+
+        self.spectro_audio_mod = mrt_audio
+        self.spectro_codec = spectrostream.SpectroStream()
+        self.spectro_codebooks = np.asarray(self.spectro_codec.rvq_codebooks, dtype=np.float32)
+        self.codec_id = "spectrostream"
+        self.sample_rate = int(self.spectro_codec.sample_rate)
+        self.required_input_channels = int(self.spectro_codec.num_channels)
+        self.codebook_embeddings = [
+            torch.from_numpy(self.spectro_codebooks[q]).to(torch.float32)
+            for q in range(self.spectro_codebooks.shape[0])
+        ]
+        print("Using codec: spectrostream")
+
+    def set_codec(self, codec_id: str):
+        codec = (codec_id or "dac").strip().lower()
+        if codec not in self.supported_codecs:
+            raise ValueError(f"Unsupported codec '{codec}'. Supported: {self.supported_codecs}")
+
+        if codec == "dac":
+            self._load_dac()
+        elif codec == "spectrostream":
+            self._load_spectrostream()
+        else:
+            raise ValueError(f"Unsupported codec '{codec}'")
+
+        # Palette/index tensors are codec-specific and must be rebuilt after switching.
+        self.files = None
+        self.prev_best_index = None
+        self.rvq_groups = None
+        self.palette_codes = None
+        self.palette_desc_groups = None
+        self.palette_desc_full = None
+        self.palette_file_ids = None
+        self.palette_frame_indices = None
+
+        return f"Codec switched to '{self.codec_id}'. Rebuild the source palette."
 
     @staticmethod
     def _resolve_file_entry(entry):
@@ -130,7 +218,7 @@ class LatentGranularSynthesis:
         return resolved
 
     def encode(self, audio_array):
-        """Encode audio using DAC."""
+        """Encode audio using the active codec."""
         if audio_array is None:
             return None, None
 
@@ -139,44 +227,100 @@ class LatentGranularSynthesis:
 
         audio_array = np.asarray(audio_array, dtype=np.float32)
 
-        if audio_array.ndim > 1:
-            audio_array = librosa.to_mono(audio_array)
-
         if audio_array.size == 0:
             return None, None
 
-        inputs = self.processor(
-            raw_audio=audio_array,
-            sampling_rate=self.sample_rate,
-            return_tensors="pt",
-        )
+        if self.codec_id == "dac":
+            if audio_array.ndim > 1:
+                audio_array = librosa.to_mono(audio_array)
 
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            inputs = self.processor(
+                raw_audio=audio_array,
+                sampling_rate=self.sample_rate,
+                return_tensors="pt",
+            )
 
-        with torch.no_grad():
-            with self._autocast_context():
-                encoder_outputs = self.model.encode(inputs["input_values"])
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-        audio_codes = encoder_outputs.audio_codes.detach().to("cpu")
-        quantized_representation = encoder_outputs.quantized_representation.detach().to("cpu", dtype=torch.float32)
+            with torch.no_grad():
+                with self._autocast_context():
+                    encoder_outputs = self.model.encode(inputs["input_values"])
 
-        return audio_codes, quantized_representation
+            audio_codes = encoder_outputs.audio_codes.detach().to("cpu")
+            quantized_representation = encoder_outputs.quantized_representation.detach().to("cpu", dtype=torch.float32)
+            return audio_codes, quantized_representation
+
+        if self.codec_id == "spectrostream":
+            if self.spectro_codec is None or self.spectro_audio_mod is None:
+                self._load_spectrostream()
+
+            if audio_array.ndim == 1:
+                samples = audio_array[:, np.newaxis]
+            else:
+                samples = np.asarray(audio_array, dtype=np.float32)
+                if samples.shape[0] < samples.shape[1]:
+                    samples = samples.T
+
+            if samples.shape[1] == 1 and self.required_input_channels == 2:
+                samples = np.repeat(samples, 2, axis=1)
+            elif samples.shape[1] > self.required_input_channels:
+                samples = samples[:, : self.required_input_channels]
+            elif samples.shape[1] < self.required_input_channels:
+                reps = [samples[:, min(i, samples.shape[1] - 1)] for i in range(self.required_input_channels)]
+                samples = np.stack(reps, axis=1)
+
+            waveform = self.spectro_audio_mod.Waveform(np.ascontiguousarray(samples, dtype=np.float32), self.sample_rate)
+            tokens_frame_major = np.asarray(self.spectro_codec.encode(waveform), dtype=np.int32)
+            if tokens_frame_major.ndim != 2:
+                return None, None
+
+            # [T, K] -> [1, K, T] to match DAC-style downstream pipeline.
+            tokens = torch.from_numpy(np.ascontiguousarray(tokens_frame_major.T[np.newaxis, :, :])).to(torch.int64)
+            return tokens, None
+
+        raise RuntimeError(f"Unsupported active codec: {self.codec_id}")
 
     def decode(self, audio_codes=None, quantized_representation=None):
-        """Decode DAC tokens or quantized representation back to audio."""
+        """Decode tokens/latents with the active codec."""
         if audio_codes is None and quantized_representation is None:
             return None
 
-        target_dtype = self.compute_dtype if self.device.type == "cuda" else torch.float32
+        if self.codec_id == "dac":
+            target_dtype = self.compute_dtype if self.device.type == "cuda" else torch.float32
 
-        with torch.no_grad():
-            with self._autocast_context():
-                if audio_codes is not None:
-                    tokens = audio_codes.to(self.device, dtype=torch.int64)
-                    return self.model.decode(audio_codes=tokens)
+            with torch.no_grad():
+                with self._autocast_context():
+                    if audio_codes is not None:
+                        tokens = audio_codes.to(self.device, dtype=torch.int64)
+                        return self.model.decode(audio_codes=tokens)
 
-                quantized_representation = quantized_representation.to(self.device, dtype=target_dtype)
-                return self.model.decode(quantized_representation)
+                    quantized_representation = quantized_representation.to(self.device, dtype=target_dtype)
+                    return self.model.decode(quantized_representation)
+
+        if self.codec_id == "spectrostream":
+            if self.spectro_codec is None:
+                self._load_spectrostream()
+            if audio_codes is None:
+                return None
+
+            tokens = audio_codes.detach().cpu().numpy()
+            if tokens.ndim == 3:
+                tokens = tokens[0]
+            if tokens.ndim != 2:
+                return None
+
+            # [K, T] -> [T, K] expected by SpectroStream.
+            frame_major = np.asarray(tokens.T, dtype=np.int32)
+            waveform = self.spectro_codec.decode(frame_major)
+            samples = np.asarray(waveform.samples, dtype=np.float32)
+            if samples.ndim > 1:
+                samples = librosa.to_mono(samples.T)
+
+            # Return a DAC-like payload for downstream compatibility.
+            audio_values = torch.from_numpy(np.ascontiguousarray(samples[np.newaxis, np.newaxis, :], dtype=np.float32))
+            return SimpleNamespace(audio_values=audio_values)
+
+        return None
 
     def _autocast_context(self):
         if self.device.type == "cuda":
@@ -298,13 +442,38 @@ class LatentGranularSynthesis:
                     if frames.size == 0:
                         break
 
-                    mono = librosa.to_mono(frames.T)
-                    if source_sr != self.sample_rate:
-                        mono = librosa.resample(mono, orig_sr=source_sr, target_sr=self.sample_rate)
-                    mono = librosa.util.normalize(mono)
-                    if mono.size == 0:
+                    chunk = np.asarray(frames, dtype=np.float32)
+                    if self.required_input_channels <= 1:
+                        mono = librosa.to_mono(chunk.T)
+                        if source_sr != self.sample_rate:
+                            mono = librosa.resample(mono, orig_sr=source_sr, target_sr=self.sample_rate)
+                        mono = librosa.util.normalize(mono)
+                        if mono.size == 0:
+                            continue
+                        yield mono
                         continue
-                    yield mono
+
+                    if source_sr != self.sample_rate:
+                        channels = []
+                        for ch in range(chunk.shape[1]):
+                            channels.append(librosa.resample(chunk[:, ch], orig_sr=source_sr, target_sr=self.sample_rate))
+                        min_len = min(len(ch) for ch in channels)
+                        chunk = np.stack([ch[:min_len] for ch in channels], axis=1)
+
+                    if chunk.shape[1] == 1 and self.required_input_channels == 2:
+                        chunk = np.repeat(chunk, 2, axis=1)
+                    elif chunk.shape[1] > self.required_input_channels:
+                        chunk = chunk[:, : self.required_input_channels]
+                    elif chunk.shape[1] < self.required_input_channels:
+                        reps = [chunk[:, min(i, chunk.shape[1] - 1)] for i in range(self.required_input_channels)]
+                        chunk = np.stack(reps, axis=1)
+
+                    peak = float(np.max(np.abs(chunk))) if chunk.size > 0 else 0.0
+                    if peak > 1.0e-6:
+                        chunk = chunk / peak
+                    if chunk.size == 0:
+                        continue
+                    yield chunk
         except Exception as exc:
             print(f"Failed streaming {path}: {exc}")
 
@@ -313,8 +482,26 @@ class LatentGranularSynthesis:
             return None
 
         segment = np.asarray(segment, dtype=np.float32)
-        if segment.ndim > 1:
-            segment = librosa.to_mono(segment)
+        if self.required_input_channels <= 1:
+            if segment.ndim > 1:
+                if segment.shape[0] < segment.shape[1]:
+                    segment = segment.T
+                segment = librosa.to_mono(segment.T)
+        else:
+            if segment.ndim == 1:
+                segment = np.repeat(segment[:, np.newaxis], self.required_input_channels, axis=1)
+            elif segment.ndim == 2:
+                if segment.shape[0] < segment.shape[1]:
+                    segment = segment.T
+                if segment.shape[1] == 1 and self.required_input_channels == 2:
+                    segment = np.repeat(segment, 2, axis=1)
+                elif segment.shape[1] > self.required_input_channels:
+                    segment = segment[:, : self.required_input_channels]
+                elif segment.shape[1] < self.required_input_channels:
+                    reps = [segment[:, min(i, segment.shape[1] - 1)] for i in range(self.required_input_channels)]
+                    segment = np.stack(reps, axis=1)
+            else:
+                return None
 
         if segment.size == 0:
             return None
@@ -408,7 +595,7 @@ class LatentGranularSynthesis:
 
     def set_ablation(self, match_mode: str, swap_mode: str):
         match_mode = (match_mode or "beam").strip().lower()
-        swap_mode = (swap_mode or "rvq_group").strip().lower()
+        swap_mode = (swap_mode or "full_layer").strip().lower()
 
         if match_mode not in ("beam", "greedy"):
             raise ValueError(f"Unsupported match_mode: {match_mode}")
@@ -756,6 +943,15 @@ def morph_audio(target_file):
     return _get_synth().morph_audio(target_file)
 
 
+def set_codec(codec_id):
+    return _get_synth().set_codec(codec_id)
+
+
+def set_ablation_mode(match_mode, swap_mode):
+    _get_synth().set_ablation(match_mode, swap_mode)
+    return f"Matching mode set to '{match_mode}', swap mode set to '{swap_mode}'."
+
+
 def temperature(temperature, threshold):
     return _get_synth().set_temperature(temperature, threshold)
 
@@ -772,7 +968,34 @@ def topk(top_k):
     return _get_synth().set_topk(top_k)
 
 
+def morph_audio_with_mix(target_file, dry_wet):
+    result = _get_synth().morph_audio(target_file)
+    if result is None:
+        return None, None, None
+
+    sr, wet = result
+    wet_arr = np.asarray(wet, dtype=np.float32)
+    if np.issubdtype(wet.dtype, np.integer):
+        wet_arr = wet_arr / 32767.0
+
+    dry = np.zeros_like(wet_arr, dtype=np.float32)
+    target_path = _get_synth()._resolve_file_entry(target_file)
+    if target_path is not None and target_path.exists():
+        dry_audio, _ = librosa.load(str(target_path), sr=sr, mono=True)
+        n = min(len(dry_audio), len(wet_arr))
+        dry[:n] = dry_audio[:n]
+        wet_arr = wet_arr[:n]
+        dry = dry[:n]
+
+    mix_ratio = float(np.clip(dry_wet, 0.0, 1.0))
+    mixed = np.clip((1.0 - mix_ratio) * dry + mix_ratio * wet_arr, -1.0, 1.0)
+    wet_arr = np.clip(wet_arr, -1.0, 1.0)
+    dry = np.clip(dry, -1.0, 1.0)
+    return (sr, dry), (sr, wet_arr), (sr, mixed)
+
+
 def _build_demo():
+    synth = _get_synth()
     with gr.Blocks() as demo:
         gr.Markdown("**Step 1:** Upload and process source sounds before morphing a target clip.")
         with gr.Row():
@@ -783,25 +1006,48 @@ def _build_demo():
                 text = gr.Textbox(label="Result")
 
             with gr.Column():
+                with gr.Row():
+                    codec_dropdown = gr.Dropdown(
+                        choices=synth.supported_codecs,
+                        value=synth.codec_id,
+                        label="Codec",
+                    )
+                    match_mode_dropdown = gr.Dropdown(
+                        choices=["beam", "greedy"],
+                        value=synth.match_mode,
+                        label="Match Mode",
+                    )
+                    swap_mode_dropdown = gr.Dropdown(
+                        choices=["full_layer", "rvq_group"],
+                        value=synth.swap_mode,
+                        label="Swap Mode",
+                    )
+
                 target_file = gr.File(label="Target sound")
 
                 with gr.Row():
-                    temp_slider = gr.Slider(0.1, 2.0, value=0.5, label="Temperature")
-                    threshold_slider = gr.Slider(0.1, 2.0, value=1.0, label="Threshold")
+                    temp_slider = gr.Slider(0.1, 2.0, value=0.47, label="Temperature")
+                    threshold_slider = gr.Slider(0.1, 2.0, value=0.55, label="Threshold")
 
                 with gr.Row():
-                    continuity_slider = gr.Slider(0.0, 1.0, value=0.3, label="Continuity")
-                    rvq_focus_slider = gr.Slider(0.0, 1.0, value=0.5, label="RVQ Focus")
+                    continuity_slider = gr.Slider(0.0, 1.0, value=0.93, label="Continuity")
+                    rvq_focus_slider = gr.Slider(0.0, 1.0, value=0.3, label="RVQ Focus")
 
                 with gr.Row():
-                    unit_slider = gr.Slider(1, 10, value=2, step=1, label="Unit Size")
+                    unit_slider = gr.Slider(1, 10, value=7, step=1, label="Unit Size")
                     stride_slider = gr.Slider(1, 10, value=2, step=1, label="Stride")
 
                 with gr.Row():
-                    topk_slider = gr.Slider(1, 8, value=4, step=1, label="Top-K")
+                    topk_slider = gr.Slider(1, 8, value=7, step=1, label="Top-K")
+
+                with gr.Row():
+                    drywet_preview = gr.Slider(0.0, 1.0, value=1.0, step=0.01, label="Playback Dry/Wet")
 
                 b2 = gr.Button("Morph Audio")
-                audioplayer = gr.Audio(label="Output")
+                with gr.Row():
+                    dry_player = gr.Audio(label="Dry")
+                    wet_player = gr.Audio(label="Wet")
+                    mix_player = gr.Audio(label="Dry/Wet Mix")
 
         temp_slider.change(temperature, inputs=[temp_slider, threshold_slider])
         threshold_slider.change(temperature, inputs=[temp_slider, threshold_slider])
@@ -810,9 +1056,12 @@ def _build_demo():
         unit_slider.change(unit, inputs=[unit_slider, stride_slider])
         stride_slider.change(unit, inputs=[unit_slider, stride_slider])
         topk_slider.change(topk, inputs=[topk_slider])
+        codec_dropdown.change(set_codec, inputs=[codec_dropdown], outputs=text)
+        match_mode_dropdown.change(set_ablation_mode, inputs=[match_mode_dropdown, swap_mode_dropdown], outputs=text)
+        swap_mode_dropdown.change(set_ablation_mode, inputs=[match_mode_dropdown, swap_mode_dropdown], outputs=text)
 
         b1.click(build_dataset, inputs=[db_file, aug_checkbox], outputs=text)
-        b2.click(morph_audio, inputs=target_file, outputs=audioplayer)
+        b2.click(morph_audio_with_mix, inputs=[target_file, drywet_preview], outputs=[dry_player, wet_player, mix_player])
 
     return demo
 

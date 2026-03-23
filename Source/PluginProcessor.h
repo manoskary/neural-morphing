@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -83,12 +84,18 @@ private:
 
     void refreshBackendSampleRate(double sampleRate);
     void mixWetBuffer(juce::AudioBuffer<float>& buffer, juce::AudioBuffer<float>& dryBuffer);
+    void applySafetyLimiter(juce::AudioBuffer<float>& buffer);
     void initialiseBackend();
     void shutdownWorkers();
     void createWorkers();
     void configureRealtimeTimings();
     void pushRealtimeInputHistory(const juce::AudioBuffer<float>& inputBlock);
     const juce::AudioBuffer<float>& selectRealtimeEncodeInput(const juce::AudioBuffer<float>& currentBlock) const;
+    void startRealtimeWorker();
+    void stopRealtimeWorker();
+    void queueRealtimeMorphTask(const juce::AudioBuffer<float>& encodeInput);
+    void realtimeWorkerLoop();
+    void processRealtimeMorphTask(juce::AudioBuffer<float>& encodeInput);
 
     std::unique_ptr<ModelBackend> backend_;
     std::unique_ptr<PaletteIndex> paletteIndex_;
@@ -124,10 +131,18 @@ private:
     std::vector<float> morphSmoothingState_;
     mutable juce::SpinLock morphCacheMutex_;
     std::atomic<bool> resetSmoothingPending_{ false };
-    int lastMatchedIndex_ = -1;
+    std::atomic<int> lastMatchedIndex_{ -1 };
     int morphUpdateCountdownSamples_ = 0;
     juce::AudioBuffer<float> lastRealtimeMorphBlock_;
     bool hasLastRealtimeMorphBlock_ = false;
+    int lastRealtimeMorphReadPosition_ = 0;
+    float outputSafetyGain_ = 1.0f;
+    std::thread realtimeWorkerThread_;
+    std::atomic<bool> realtimeWorkerShouldExit_{ false };
+    juce::WaitableEvent realtimeWorkerWake_;
+    juce::CriticalSection realtimeTaskMutex_;
+    juce::AudioBuffer<float> pendingRealtimeEncodeInput_;
+    bool hasPendingRealtimeTask_ = false;
 
     mutable juce::CriticalSection standaloneMutex_;
     juce::AudioBuffer<float> standaloneSourceBuffer_;

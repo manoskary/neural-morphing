@@ -206,6 +206,8 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     addAndMakeVisible(backendLabel_);
     addAndMakeVisible(bridgeCodecSelector_);
     addAndMakeVisible(bridgeCodecLabel_);
+    addAndMakeVisible(swapModeSelector_);
+    addAndMakeVisible(swapModeLabel_);
     addAndMakeVisible(statusDisplayLabel_);
     
     backendSelector_.addItem("Native", 1);
@@ -218,11 +220,17 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     bridgeCodecSelector_.addItem("DAC", 1);
     bridgeCodecSelector_.addItem("SpectroStream", 2);
     bridgeCodecAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor_.parameters, "bridgeCodec", bridgeCodecSelector_);
+
+    swapModeSelector_.addItem("Full Layer", 1);
+    swapModeSelector_.addItem("RVQ Group", 2);
+    swapModeAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor_.parameters, "swapMode", swapModeSelector_);
     
     backendLabel_.attachToComponent(&backendSelector_, true);
     backendLabel_.setColour(juce::Label::textColourId, textGrey);
     bridgeCodecLabel_.attachToComponent(&bridgeCodecSelector_, true);
     bridgeCodecLabel_.setColour(juce::Label::textColourId, textGrey);
+    swapModeLabel_.attachToComponent(&swapModeSelector_, true);
+    swapModeLabel_.setColour(juce::Label::textColourId, textGrey);
     statusDisplayLabel_.setJustificationType(juce::Justification::centredLeft);
     statusDisplayLabel_.setColour(juce::Label::textColourId, neonGreen.withAlpha(0.8f));
 
@@ -246,6 +254,7 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     clearSourceButton_.addListener(this);
     backendSelector_.addListener(this);
     bridgeCodecSelector_.addListener(this);
+    swapModeSelector_.addListener(this);
 
     startTimerHz(10);
 }
@@ -261,6 +270,7 @@ NeuralMorphingAudioProcessorEditor::~NeuralMorphingAudioProcessorEditor()
     clearSourceButton_.removeListener(this);
     backendSelector_.removeListener(this);
     bridgeCodecSelector_.removeListener(this);
+    swapModeSelector_.removeListener(this);
 }
 
 void NeuralMorphingAudioProcessorEditor::paint(juce::Graphics& g)
@@ -438,6 +448,11 @@ void NeuralMorphingAudioProcessorEditor::resized()
     // Bridge codec row
     juce::Rectangle<int> bridgeCodecArea(controlsX, currentY, controlsWidth, 32);
     bridgeCodecSelector_.setBounds(bridgeCodecArea.removeFromLeft(220).reduced(2));
+    currentY += 32 + 4;
+
+    // Swap mode row
+    juce::Rectangle<int> swapModeArea(controlsX, currentY, controlsWidth, 32);
+    swapModeSelector_.setBounds(swapModeArea.removeFromLeft(220).reduced(2));
     currentY += 32 + 4;
 
     // Backend status row
@@ -649,6 +664,10 @@ void NeuralMorphingAudioProcessorEditor::comboBoxChanged(juce::ComboBox* comboBo
     {
         int codecIndex = bridgeCodecSelector_.getSelectedItemIndex();
         processor_.setBridgeCodec(codecIndex);
+    }
+    else if (comboBox == &swapModeSelector_)
+    {
+        processor_.invalidateMorphCache();
     }
 }
 
