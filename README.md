@@ -138,13 +138,35 @@ Run the 4-ablation matrix and compute metrics:
 python tools/evaluate_morphing.py evaluate \
   --manifest /tmp/neural_morph_manifest.json \
   --output-dir /tmp/neural_morph_eval \
-  --runner-cmd "python tools/run_morph_ablation.py --palette-manifest {palette_manifest} --source {source} --output-wav {output_wav} --tokens-npy {tokens_npy} --match-indices-npy {match_indices_npy} --latency-json {latency_json} --matcher {matcher} --swap {swap}"
+  --runner-cmd "./.venv/bin/python tools/run_morph_ablation.py --codec {codec} --palette-manifest {palette_manifest} --source {source} --output-wav {output_wav} --tokens-npy {tokens_npy} --match-indices-npy {match_indices_npy} --latency-json {latency_json} --matcher {matcher} --swap {swap} --temperature {temperature} --threshold {threshold} --continuity {continuity} --rvq-focus {rvq_focus} --unit {unit} --stride {stride} --top-k {top_k} --seed {seed}"
 ```
 
 Reports are written to `.../reports/` with:
 - per-clip CSV
-- summary JSON (mean/std/95% CI + paired significance)
+- summary JSON (`quality_metrics`, `structure_metrics`, `system_health`, latency, significance)
 - reproducibility JSON
+- ranked presets JSON (gated by system-health checks)
+
+Framework validation report:
+```bash
+python tools/evaluate_morphing.py validate \
+  --manifest /tmp/neural_morph_manifest.json \
+  --output-dir /tmp/neural_morph_eval \
+  --report-json /tmp/neural_morph_eval/reports/validation.json
+```
+
+Random-search presets:
+```bash
+python tools/evaluate_morphing.py search \
+  --manifest /tmp/neural_morph_manifest.json \
+  --output-dir /tmp/neural_morph_search \
+  --runner-cmd "./.venv/bin/python tools/run_morph_ablation.py --codec {codec} --palette-manifest {palette_manifest} --source {source} --output-wav {output_wav} --tokens-npy {tokens_npy} --match-indices-npy {match_indices_npy} --latency-json {latency_json} --matcher {matcher} --swap {swap} --temperature {temperature} --threshold {threshold} --continuity {continuity} --rvq-focus {rvq_focus} --unit {unit} --stride {stride} --top-k {top_k} --seed {seed}"
+```
+
+Interactive dashboard:
+```bash
+python tools/eval_dashboard.py
+```
 
 ## Roadmap (Short)
 

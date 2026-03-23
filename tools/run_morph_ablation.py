@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import random
 import sys
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -41,8 +44,10 @@ def main() -> None:
     parser.add_argument("--match-indices-npy", required=True, help="Output matched index path (.npy)")
     parser.add_argument("--latency-json", required=True, help="Output latency JSON path")
     parser.add_argument("--model", default="descript/dac_44khz", help="DAC model name/path")
+    parser.add_argument("--codec", choices=["dac", "spectrostream"], default="dac")
     parser.add_argument("--matcher", choices=["greedy", "beam"], default="beam")
     parser.add_argument("--swap", choices=["full_layer", "rvq_group"], default="rvq_group")
+    parser.add_argument("--seed", type=int, default=1234, help="Deterministic seed")
     parser.add_argument("--temperature", type=float, default=0.5)
     parser.add_argument("--threshold", type=float, default=1.0)
     parser.add_argument("--continuity", type=float, default=0.3)
@@ -51,9 +56,20 @@ def main() -> None:
     parser.add_argument("--stride", type=int, default=2)
     parser.add_argument("--top-k", type=int, default=4)
     args = parser.parse_args()
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     palette_manifest = Path(args.palette_manifest)
     palette_files = _read_palette_manifest(palette_manifest)
+
+    if args.codec != "dac":
+        raise RuntimeError(
+            "tools/run_morph_ablation.py currently supports codec='dac'. "
+            "For spectrostream runs, provide a custom --runner-cmd that supports that codec."
+        )
 
     synth = LatentGranularSynthesis(model_name=args.model)
     synth.set_temperature(args.temperature, args.threshold)
@@ -79,15 +95,54 @@ def main() -> None:
 
     audio_f32 = np.asarray(audio, dtype=np.float32) / 32767.0
     sf.write(out_wav, audio_f32, sr)
-    np.save(out_tokens, np.asarray(debug["tokens"], dtype=np.int32))
-    np.save(out_match, np.asarray(debug["match_indices"], dtype=np.int32))
+    tokens_arr = np.asarray(debug["tokens"], dtype=np.int32)
+    match_arr = np.asarray(debug["match_indices"], dtype=np.int32)
+    np.save(out_tokens, tokens_arr)
+    np.save(out_match, match_arr)
 
     timings = debug.get("timings", {})
+    source_info = sf.info(args.source)
+    expected_output_samples = int(round((source_info.frames / max(source_info.samplerate, 1)) * sr))
+    output_samples = int(audio_f32.shape[0]) if audio_f32.ndim > 0 else 0
+    output_channels = int(audio_f32.shape[1]) if audio_f32.ndim > 1 else 1
+    duration_drift_samples = int(output_samples - expected_output_samples)
+    duration_drift_ms = float(1000.0 * duration_drift_samples / max(sr, 1))
+    token_layout_valid = bool(tokens_arr.ndim == 2 and tokens_arr.shape[0] > 0 and tokens_arr.shape[1] > 0)
+
+    hasher = hashlib.sha256()
+    hasher.update(tokens_arr.tobytes(order="C"))
+    hasher.update(match_arr.tobytes(order="C"))
+    determinism_hash = hasher.hexdigest()
+
+    encode_ms = float(timings.get("encode_ms", 0.0))
+    decode_ms = float(timings.get("decode_ms", 0.0))
+    total_ms = float(timings.get("total_ms", 0.0))
+    audio_seconds = float(len(audio) / max(sr, 1))
+    end_to_end_rtf = ((encode_ms + decode_ms) / 1000.0) / audio_seconds if audio_seconds > 0 else float("nan")
     payload = {
-        "encode_ms": float(timings.get("encode_ms", 0.0)),
-        "decode_ms": float(timings.get("decode_ms", 0.0)),
-        "total_ms": float(timings.get("total_ms", 0.0)),
-        "audio_seconds": float(len(audio) / max(sr, 1)),
+        "codec": args.codec,
+        "matcher": args.matcher,
+        "swap": args.swap,
+        "seed": int(args.seed),
+        "encode_ok": bool(encode_ms > 0.0),
+        "decode_ok": bool(decode_ms > 0.0),
+        "token_layout_valid": token_layout_valid,
+        "tokens_shape": list(tokens_arr.shape),
+        "match_indices_len": int(match_arr.reshape(-1).shape[0]),
+        "source_channels": int(source_info.channels),
+        "output_channels": output_channels,
+        "expected_output_samples": expected_output_samples,
+        "output_samples": output_samples,
+        "duration_drift_samples": duration_drift_samples,
+        "duration_drift_ms": duration_drift_ms,
+        "determinism_hash": determinism_hash,
+        "failure_count": 0,
+        "retry_count": 0,
+        "encode_ms": encode_ms,
+        "decode_ms": decode_ms,
+        "total_ms": total_ms,
+        "audio_seconds": audio_seconds,
+        "end_to_end_rtf": end_to_end_rtf,
     }
     out_latency.write_text(json.dumps(payload, indent=2))
 
