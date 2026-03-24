@@ -30,6 +30,26 @@ def _env_flag(name: str, default: str = "0") -> bool:
 
 
 class LatentGranularSynthesis:
+    DAC_DEFAULTS = {
+        "temperature": 0.47,
+        "threshold": 0.55,
+        "continuity": 0.93,
+        "rvq_focus": 0.30,
+        "unit": 7,
+        "stride": 2,
+        "top_k": 7,
+    }
+
+    SPECTROSTREAM_DEFAULTS = {
+        "temperature": 0.4315336855083648,
+        "threshold": 0.24313963041725395,
+        "continuity": 0.7887727172362835,
+        "rvq_focus": 0.3460889655971231,
+        "unit": 2,
+        "stride": 2,
+        "top_k": 8,
+    }
+
     @staticmethod
     def _select_device(device):
         if device is not None:
@@ -58,6 +78,12 @@ class LatentGranularSynthesis:
         self.compute_dtype = torch.float16 if self.device.type == "cuda" else torch.float32
         self.chunk_duration_s = max(chunk_duration_s, 1.0)
         self.match_batch = max(int(match_batch), 1)
+        # Keep chunk loudness by default to preserve temporal envelope fidelity.
+        self.normalize_input_chunks = _env_flag("NEURAL_MORPHING_NORMALIZE_INPUT_CHUNKS", "0")
+        # Keep a tiny fixed headroom to avoid hard clipping in int16 exports.
+        self.output_peak_target = float(
+            np.clip(float(os.getenv("NEURAL_MORPHING_OUTPUT_PEAK_TARGET", "0.995")), 0.80, 0.999)
+        )
         self.model_name = model_name
 
         self.model = None
@@ -80,17 +106,18 @@ class LatentGranularSynthesis:
 
         self._load_dac()
 
-        self.unit = 7
-        self.stride = 2
+        self.unit = 1
+        self.stride = 1
         self.temperature = 0.47
         self.threshold = 0.55
         self.continuity = 0.93
         self.rvq_focus = 0.30
-        self.top_k = 7
+        self.top_k = 1
         self.candidate_count = 96
         self.beam_width = 12
         self.match_mode = "beam"
         self.swap_mode = "full_layer"
+        self._apply_codec_defaults("dac")
         self.last_timings = {"encode_ms": 0.0, "decode_ms": 0.0, "total_ms": 0.0}
 
         self.files = None
@@ -110,6 +137,33 @@ class LatentGranularSynthesis:
         print(f"Sample rate: {self.sample_rate} Hz")
         print(f"Compute device: {self.device}")
         print(f"Supported codecs: {', '.join(self.supported_codecs)}")
+
+    def _codec_defaults(self, codec_id: str | None = None) -> dict:
+        codec = (codec_id or self.codec_id or "dac").strip().lower()
+        if codec == "spectrostream":
+            return dict(self.SPECTROSTREAM_DEFAULTS)
+        return dict(self.DAC_DEFAULTS)
+
+    def _apply_codec_defaults(self, codec_id: str | None = None) -> None:
+        defaults = self._codec_defaults(codec_id)
+        self.temperature = float(defaults["temperature"])
+        self.threshold = float(defaults["threshold"])
+        self.continuity = float(defaults["continuity"])
+        self.rvq_focus = float(defaults["rvq_focus"])
+        self.unit = max(1, int(defaults["unit"]))
+        self.stride = max(1, int(defaults["stride"]))
+        self.top_k = max(1, int(defaults["top_k"]))
+
+    def runtime_params(self) -> dict:
+        return {
+            "temperature": float(self.temperature),
+            "threshold": float(self.threshold),
+            "continuity": float(self.continuity),
+            "rvq_focus": float(self.rvq_focus),
+            "unit": int(self.unit),
+            "stride": int(self.stride),
+            "top_k": int(self.top_k),
+        }
 
     def _load_dac(self):
         if self.model is not None and self.processor is not None:
@@ -147,10 +201,10 @@ class LatentGranularSynthesis:
         # SpectroStream currently relies on TensorFlow/JAX internals; on low-VRAM GPUs
         # this frequently fails with libdevice/JIT/OOM errors. Keep CPU as robust default.
         if not _env_flag("NEURAL_MORPHING_SPECTROSTREAM_USE_GPU", "0"):
-            os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
-            os.environ.setdefault("JAX_PLATFORM_NAME", "cpu")
-            os.environ.setdefault("JAX_PLATFORMS", "cpu")
-            os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""
+            os.environ["JAX_PLATFORM_NAME"] = "cpu"
+            os.environ["JAX_PLATFORMS"] = "cpu"
+            os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
             os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
         from magenta_rt import audio as mrt_audio
@@ -190,7 +244,14 @@ class LatentGranularSynthesis:
         self.palette_file_ids = None
         self.palette_frame_indices = None
 
-        return f"Codec switched to '{self.codec_id}'. Rebuild the source palette."
+        self._apply_codec_defaults(codec)
+        defaults = self.runtime_params()
+        return (
+            f"Codec switched to '{self.codec_id}'. Rebuild the source palette. "
+            f"Defaults applied: temp={defaults['temperature']:.4f}, thr={defaults['threshold']:.4f}, "
+            f"cont={defaults['continuity']:.4f}, rvq={defaults['rvq_focus']:.4f}, "
+            f"unit={defaults['unit']}, stride={defaults['stride']}, top_k={defaults['top_k']}."
+        )
 
     @staticmethod
     def _resolve_file_entry(entry):
@@ -441,6 +502,27 @@ class LatentGranularSynthesis:
 
         return full_desc, group_descs
 
+    def _normalize_chunk(self, chunk: np.ndarray) -> np.ndarray:
+        if chunk.size == 0:
+            return chunk
+        chunk = np.asarray(chunk, dtype=np.float32)
+        if not self.normalize_input_chunks:
+            return chunk
+        peak = float(np.max(np.abs(chunk)))
+        if peak > 1.0e-6:
+            chunk = chunk / peak
+        return chunk
+
+    def _prepare_output_audio(self, prepared: np.ndarray) -> np.ndarray:
+        prepared = np.asarray(prepared, dtype=np.float32)
+        prepared = np.nan_to_num(prepared, nan=0.0, posinf=0.0, neginf=0.0)
+        if prepared.size == 0:
+            return prepared
+        peak = float(np.max(np.abs(prepared)))
+        if peak > self.output_peak_target and peak > 1.0e-6:
+            prepared = prepared * (self.output_peak_target / peak)
+        return np.clip(prepared, -self.output_peak_target, self.output_peak_target)
+
     def _stream_audio(self, path):
         """Yield normalized mono chunks from disk to keep memory usage low."""
         if not path:
@@ -465,7 +547,7 @@ class LatentGranularSynthesis:
                         mono = librosa.to_mono(chunk.T)
                         if source_sr != self.sample_rate:
                             mono = librosa.resample(mono, orig_sr=source_sr, target_sr=self.sample_rate)
-                        mono = librosa.util.normalize(mono)
+                        mono = self._normalize_chunk(mono)
                         if mono.size == 0:
                             continue
                         yield mono
@@ -486,9 +568,7 @@ class LatentGranularSynthesis:
                         reps = [chunk[:, min(i, chunk.shape[1] - 1)] for i in range(self.required_input_channels)]
                         chunk = np.stack(reps, axis=1)
 
-                    peak = float(np.max(np.abs(chunk))) if chunk.size > 0 else 0.0
-                    if peak > 1.0e-6:
-                        chunk = chunk / peak
+                    chunk = self._normalize_chunk(chunk)
                     if chunk.size == 0:
                         continue
                     yield chunk
@@ -929,8 +1009,8 @@ class LatentGranularSynthesis:
         else:
             prepared = final_np
 
-        clipped = np.clip(prepared, -1.0, 1.0)
-        scaled = (clipped * 32767).astype(np.int16, copy=False)
+        prepared = self._prepare_output_audio(prepared)
+        scaled = np.round(prepared * 32767.0).astype(np.int16, copy=False)
         self.last_timings["total_ms"] = (time.perf_counter() - started) * 1000.0
 
         if return_debug:
@@ -963,6 +1043,22 @@ def morph_audio(target_file):
 
 def set_codec(codec_id):
     return _get_synth().set_codec(codec_id)
+
+
+def set_codec_ui(codec_id):
+    synth = _get_synth()
+    message = synth.set_codec(codec_id)
+    params = synth.runtime_params()
+    return (
+        message,
+        params["temperature"],
+        params["threshold"],
+        params["continuity"],
+        params["rvq_focus"],
+        params["unit"],
+        params["stride"],
+        params["top_k"],
+    )
 
 
 def set_ablation_mode(match_mode, swap_mode):
@@ -1056,19 +1152,19 @@ def _build_demo():
                 target_file = gr.File(label="Target sound")
 
                 with gr.Row():
-                    temp_slider = gr.Slider(0.1, 2.0, value=0.47, label="Temperature")
-                    threshold_slider = gr.Slider(0.1, 2.0, value=0.55, label="Threshold")
+                    temp_slider = gr.Slider(0.1, 2.0, value=synth.temperature, label="Temperature")
+                    threshold_slider = gr.Slider(0.1, 2.0, value=synth.threshold, label="Threshold")
 
                 with gr.Row():
-                    continuity_slider = gr.Slider(0.0, 1.0, value=0.93, label="Continuity")
-                    rvq_focus_slider = gr.Slider(0.0, 1.0, value=0.3, label="RVQ Focus")
+                    continuity_slider = gr.Slider(0.0, 1.0, value=synth.continuity, label="Continuity")
+                    rvq_focus_slider = gr.Slider(0.0, 1.0, value=synth.rvq_focus, label="RVQ Focus")
 
                 with gr.Row():
-                    unit_slider = gr.Slider(1, 10, value=7, step=1, label="Unit Size")
-                    stride_slider = gr.Slider(1, 10, value=2, step=1, label="Stride")
+                    unit_slider = gr.Slider(1, 10, value=synth.unit, step=1, label="Unit Size")
+                    stride_slider = gr.Slider(1, 10, value=synth.stride, step=1, label="Stride")
 
                 with gr.Row():
-                    topk_slider = gr.Slider(1, 8, value=7, step=1, label="Top-K")
+                    topk_slider = gr.Slider(1, 8, value=synth.top_k, step=1, label="Top-K")
 
                 with gr.Row():
                     drywet_preview = gr.Slider(0.0, 1.0, value=1.0, step=0.01, label="Playback Dry/Wet")
@@ -1086,7 +1182,11 @@ def _build_demo():
         unit_slider.change(unit, inputs=[unit_slider, stride_slider])
         stride_slider.change(unit, inputs=[unit_slider, stride_slider])
         topk_slider.change(topk, inputs=[topk_slider])
-        codec_dropdown.change(set_codec, inputs=[codec_dropdown], outputs=text)
+        codec_dropdown.change(
+            set_codec_ui,
+            inputs=[codec_dropdown],
+            outputs=[text, temp_slider, threshold_slider, continuity_slider, rvq_focus_slider, unit_slider, stride_slider, topk_slider],
+        )
         match_mode_dropdown.change(set_ablation_mode, inputs=[match_mode_dropdown, swap_mode_dropdown], outputs=text)
         swap_mode_dropdown.change(set_ablation_mode, inputs=[match_mode_dropdown, swap_mode_dropdown], outputs=text)
 

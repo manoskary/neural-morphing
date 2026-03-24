@@ -19,6 +19,27 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+TUNED_CODEC_PARAMS = {
+    "dac": {
+        "temperature": 0.47,
+        "threshold": 0.55,
+        "continuity": 0.93,
+        "rvq_focus": 0.30,
+        "unit": 7,
+        "stride": 2,
+        "top_k": 7,
+    },
+    "spectrostream": {
+        "temperature": 0.4315336855083648,
+        "threshold": 0.24313963041725395,
+        "continuity": 0.7887727172362835,
+        "rvq_focus": 0.3460889655971231,
+        "unit": 2,
+        "stride": 2,
+        "top_k": 8,
+    },
+}
+
 
 def _read_palette_manifest(path: Path) -> list[str]:
     if not path.exists():
@@ -34,6 +55,24 @@ def _read_palette_manifest(path: Path) -> list[str]:
     return files
 
 
+def _codec_defaults(codec_id: str) -> dict:
+    codec = (codec_id or "dac").strip().lower()
+    return dict(TUNED_CODEC_PARAMS.get(codec, TUNED_CODEC_PARAMS["dac"]))
+
+
+def _resolve_runtime_params(codec_id: str, args: argparse.Namespace) -> dict:
+    defaults = _codec_defaults(codec_id)
+    return {
+        "temperature": float(args.temperature) if args.temperature is not None else float(defaults["temperature"]),
+        "threshold": float(args.threshold) if args.threshold is not None else float(defaults["threshold"]),
+        "continuity": float(args.continuity) if args.continuity is not None else float(defaults["continuity"]),
+        "rvq_focus": float(args.rvq_focus) if args.rvq_focus is not None else float(defaults["rvq_focus"]),
+        "unit": int(args.unit) if args.unit is not None else int(defaults["unit"]),
+        "stride": int(args.stride) if args.stride is not None else int(defaults["stride"]),
+        "top_k": int(args.top_k) if args.top_k is not None else int(defaults["top_k"]),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a single morph ablation and export debug artifacts.")
     parser.add_argument("--palette-manifest", required=True, help="Text file with one palette file path per line")
@@ -47,14 +86,15 @@ def main() -> None:
     parser.add_argument("--matcher", choices=["greedy", "beam"], default="beam")
     parser.add_argument("--swap", choices=["full_layer", "rvq_group"], default="full_layer")
     parser.add_argument("--seed", type=int, default=1234, help="Deterministic seed")
-    parser.add_argument("--temperature", type=float, default=0.47)
-    parser.add_argument("--threshold", type=float, default=0.55)
-    parser.add_argument("--continuity", type=float, default=0.93)
-    parser.add_argument("--rvq-focus", type=float, default=0.30)
-    parser.add_argument("--unit", type=int, default=7)
-    parser.add_argument("--stride", type=int, default=2)
-    parser.add_argument("--top-k", type=int, default=7)
+    parser.add_argument("--temperature", type=float, default=None, help="Override (default: tuned per codec)")
+    parser.add_argument("--threshold", type=float, default=None, help="Override (default: tuned per codec)")
+    parser.add_argument("--continuity", type=float, default=None, help="Override (default: tuned per codec)")
+    parser.add_argument("--rvq-focus", type=float, default=None, help="Override (default: tuned per codec)")
+    parser.add_argument("--unit", type=int, default=None, help="Override (default: tuned per codec)")
+    parser.add_argument("--stride", type=int, default=None, help="Override (default: tuned per codec)")
+    parser.add_argument("--top-k", type=int, default=None, help="Override (default: tuned per codec)")
     args = parser.parse_args()
+    runtime_params = _resolve_runtime_params(args.codec, args)
 
     use_torch_cuda = str(os.getenv("NEURAL_MORPHING_USE_TORCH_CUDA", "0")).strip().lower() in (
         "1",
@@ -63,7 +103,7 @@ def main() -> None:
         "on",
     )
     if not use_torch_cuda:
-        os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
     if args.codec == "spectrostream":
         use_gpu = str(os.getenv("NEURAL_MORPHING_SPECTROSTREAM_USE_GPU", "0")).strip().lower() in (
@@ -73,10 +113,10 @@ def main() -> None:
             "on",
         )
         if not use_gpu:
-            os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
-            os.environ.setdefault("JAX_PLATFORM_NAME", "cpu")
-            os.environ.setdefault("JAX_PLATFORMS", "cpu")
-            os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""
+            os.environ["JAX_PLATFORM_NAME"] = "cpu"
+            os.environ["JAX_PLATFORMS"] = "cpu"
+            os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
             os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
     from python_project_idea import LatentGranularSynthesis
@@ -92,10 +132,10 @@ def main() -> None:
 
     synth = LatentGranularSynthesis(model_name=args.model)
     synth.set_codec(args.codec)
-    synth.set_temperature(args.temperature, args.threshold)
-    synth.set_matching(args.continuity, args.rvq_focus)
-    synth.set_unit(args.unit, args.stride)
-    synth.set_topk(args.top_k)
+    synth.set_temperature(runtime_params["temperature"], runtime_params["threshold"])
+    synth.set_matching(runtime_params["continuity"], runtime_params["rvq_focus"])
+    synth.set_unit(runtime_params["unit"], runtime_params["stride"])
+    synth.set_topk(runtime_params["top_k"])
     synth.set_ablation(args.matcher, args.swap)
 
     result = synth.build_dataset(palette_files, aug_checkbox=False)
@@ -144,6 +184,7 @@ def main() -> None:
         "matcher": args.matcher,
         "swap": args.swap,
         "seed": int(args.seed),
+        "runtime_params": runtime_params,
         "encode_ok": bool(encode_ms > 0.0),
         "decode_ok": bool(decode_ms > 0.0),
         "token_layout_valid": token_layout_valid,

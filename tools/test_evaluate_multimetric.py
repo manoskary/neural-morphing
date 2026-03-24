@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import argparse
 from pathlib import Path
 import sys
 
@@ -18,6 +19,7 @@ if str(THIS_DIR) not in sys.path:
 from evaluate_morphing import (
     ClipEntry,
     _check_manifest_leakage,
+    _resolve_runtime_params,
     metric_clipping_fraction,
     metric_envelope_correlation,
     metric_log_spectral_distance,
@@ -74,6 +76,43 @@ class MultiMetricTests(unittest.TestCase):
         self.assertTrue(np.isfinite(frac_unclipped))
         self.assertTrue(np.isfinite(frac_clipped))
         self.assertLess(frac_unclipped, frac_clipped)
+
+    def test_codec_runtime_defaults_resolution(self):
+        args = argparse.Namespace(
+            temperature=None,
+            threshold=None,
+            continuity=None,
+            rvq_focus=None,
+            unit=None,
+            stride=None,
+            top_k=None,
+        )
+        dac = _resolve_runtime_params("dac", args)
+        spectro = _resolve_runtime_params("spectrostream", args)
+        self.assertEqual(dac["unit"], 7)
+        self.assertEqual(dac["top_k"], 7)
+        self.assertEqual(spectro["unit"], 2)
+        self.assertEqual(spectro["top_k"], 8)
+        self.assertNotEqual(dac["threshold"], spectro["threshold"])
+
+    def test_codec_runtime_override_resolution(self):
+        args = argparse.Namespace(
+            temperature=0.8,
+            threshold=0.9,
+            continuity=0.2,
+            rvq_focus=0.7,
+            unit=4,
+            stride=3,
+            top_k=5,
+        )
+        resolved = _resolve_runtime_params("spectrostream", args)
+        self.assertEqual(resolved["temperature"], 0.8)
+        self.assertEqual(resolved["threshold"], 0.9)
+        self.assertEqual(resolved["continuity"], 0.2)
+        self.assertEqual(resolved["rvq_focus"], 0.7)
+        self.assertEqual(resolved["unit"], 4)
+        self.assertEqual(resolved["stride"], 3)
+        self.assertEqual(resolved["top_k"], 5)
 
 
 if __name__ == "__main__":

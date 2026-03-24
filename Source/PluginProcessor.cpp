@@ -16,13 +16,36 @@ namespace
 constexpr int monoScratchReserve = 8192;
 constexpr int matchCandidateCount = 96;
 constexpr int matchBeamWidth = 12;
-constexpr int topKMixCount = 7;
+constexpr int topKMixCountDac = 7;
+constexpr int topKMixCountSpectroStream = 8;
 constexpr int kQualityLookaheadMsDefault = 1000;
 constexpr int kQualitySuperframeSamplesDefault = 32768;
 constexpr int kQualityHopSamplesDefault = 8192;
 constexpr int kQualityCrossfadeSamplesDefault = 4096;
 constexpr int kLiveCandidateCountDefault = 48;
 constexpr int kLiveBeamWidthDefault = 6;
+
+struct MorphDefaults
+{
+    float temperature = 0.47f;
+    float threshold = 0.55f;
+    float continuity = 0.93f;
+    float rvqFocus = 0.30f;
+    int unit = 7;
+    int stride = 2;
+    int swapMode = 0;
+};
+
+constexpr MorphDefaults kDacDefaults{};
+constexpr MorphDefaults kSpectroStreamDefaults{
+    0.4315337f,
+    0.24313963f,
+    0.7887727f,
+    0.34608898f,
+    2,
+    2,
+    0
+};
 
 struct RvqGroups
 {
@@ -1128,6 +1151,7 @@ TokenBlock NeuralMorphingAudioProcessor::buildMatchedTokenBlock(const TokenBlock
             continue;
         }
 
+        const int topKMixCount = selectedCodecId() == "spectrostream" ? topKMixCountSpectroStream : topKMixCountDac;
         const int kCount = std::min(topKMixCount, static_cast<int>(grain.candidates.size()));
         std::vector<int> topIndices;
         std::vector<float> topDistances;
@@ -1746,8 +1770,25 @@ void NeuralMorphingAudioProcessor::switchBackend(int backendType)
 
 void NeuralMorphingAudioProcessor::setBridgeCodec(int codecType)
 {
+    const int selectedCodec = juce::jlimit(0, 1, codecType);
     if (auto* param = dynamic_cast<juce::AudioParameterChoice*>(parameters.getParameter("bridgeCodec")))
-        *param = juce::jlimit(0, 1, codecType);
+        *param = selectedCodec;
+
+    const auto defaults = selectedCodec == 1 ? kSpectroStreamDefaults : kDacDefaults;
+    if (auto* p = dynamic_cast<juce::AudioParameterFloat*>(parameters.getParameter("temperature")))
+        *p = defaults.temperature;
+    if (auto* p = dynamic_cast<juce::AudioParameterFloat*>(parameters.getParameter("threshold")))
+        *p = defaults.threshold;
+    if (auto* p = dynamic_cast<juce::AudioParameterFloat*>(parameters.getParameter("continuity")))
+        *p = defaults.continuity;
+    if (auto* p = dynamic_cast<juce::AudioParameterFloat*>(parameters.getParameter("rvqFocus")))
+        *p = defaults.rvqFocus;
+    if (auto* p = dynamic_cast<juce::AudioParameterInt*>(parameters.getParameter("unit")))
+        *p = defaults.unit;
+    if (auto* p = dynamic_cast<juce::AudioParameterInt*>(parameters.getParameter("stride")))
+        *p = defaults.stride;
+    if (auto* p = dynamic_cast<juce::AudioParameterChoice*>(parameters.getParameter("swapMode")))
+        *p = defaults.swapMode;
 
     shutdownWorkers();
     backend_.reset();

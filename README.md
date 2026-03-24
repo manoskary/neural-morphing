@@ -132,15 +132,10 @@ pip install magenta_rt
 ## Evaluation Harness
 
 Current tuned defaults (used by app/standalone + Python demo):
-- `temperature=0.47`
-- `threshold=0.55`
-- `continuity=0.93`
-- `rvq_focus=0.30`
-- `unit=7`
-- `stride=2`
-- `top_k=7`
-- `matcher=beam`
-- `swap=full_layer`
+- DAC: `temperature=0.47`, `threshold=0.55`, `continuity=0.93`, `rvq_focus=0.30`, `unit=7`, `stride=2`, `top_k=7`
+- SpectroStream: `temperature=0.4315`, `threshold=0.2431`, `continuity=0.7888`, `rvq_focus=0.3461`, `unit=2`, `stride=2`, `top_k=8`
+- Both codecs: `matcher=beam`, `swap=full_layer`
+- `tools/evaluate_morphing.py evaluate` and `tools/run_morph_ablation.py` use these tuned defaults per codec when parameter flags are omitted; any provided flag is treated as a global override.
 
 Prepare a deterministic manifest:
 ```bash

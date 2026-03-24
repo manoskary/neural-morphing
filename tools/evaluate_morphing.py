@@ -46,6 +46,27 @@ ABLATIONS = [
 
 DEFAULT_CODECS = ["dac", "spectrostream"]
 
+TUNED_CODEC_PARAMS = {
+    "dac": {
+        "temperature": 0.47,
+        "threshold": 0.55,
+        "continuity": 0.93,
+        "rvq_focus": 0.30,
+        "unit": 7,
+        "stride": 2,
+        "top_k": 7,
+    },
+    "spectrostream": {
+        "temperature": 0.4315336855083648,
+        "threshold": 0.24313963041725395,
+        "continuity": 0.7887727172362835,
+        "rvq_focus": 0.3460889655971231,
+        "unit": 2,
+        "stride": 2,
+        "top_k": 8,
+    },
+}
+
 
 @dataclass
 class ClipEntry:
@@ -504,6 +525,24 @@ def _parse_list_arg(raw: str, default_values: List[str]) -> List[str]:
     return items or list(default_values)
 
 
+def _codec_defaults(codec_id: str) -> dict:
+    codec = (codec_id or "dac").strip().lower()
+    return dict(TUNED_CODEC_PARAMS.get(codec, TUNED_CODEC_PARAMS["dac"]))
+
+
+def _resolve_runtime_params(codec_id: str, args: argparse.Namespace) -> dict:
+    defaults = _codec_defaults(codec_id)
+    return {
+        "temperature": float(args.temperature) if args.temperature is not None else float(defaults["temperature"]),
+        "threshold": float(args.threshold) if args.threshold is not None else float(defaults["threshold"]),
+        "continuity": float(args.continuity) if args.continuity is not None else float(defaults["continuity"]),
+        "rvq_focus": float(args.rvq_focus) if args.rvq_focus is not None else float(defaults["rvq_focus"]),
+        "unit": int(args.unit) if args.unit is not None else int(defaults["unit"]),
+        "stride": int(args.stride) if args.stride is not None else int(defaults["stride"]),
+        "top_k": int(args.top_k) if args.top_k is not None else int(defaults["top_k"]),
+    }
+
+
 def evaluate(args: argparse.Namespace) -> None:
     manifest_path = Path(args.manifest)
     out_root = Path(args.output_dir)
@@ -533,6 +572,7 @@ def evaluate(args: argparse.Namespace) -> None:
     generated_for_fad: Dict[str, List[Path]] = {}
 
     for codec_id in selected_codecs:
+        codec_params = _resolve_runtime_params(codec_id, args)
         refs_for_fad.setdefault(codec_id, [])
         for ablation in selected_ablation_defs:
             ab_id = ablation["id"]
@@ -555,13 +595,13 @@ def evaluate(args: argparse.Namespace) -> None:
                     "reference": str(clip.reference),
                     "palette_manifest": str(palette_manifest),
                     "params": {
-                        "temperature": args.temperature,
-                        "threshold": args.threshold,
-                        "continuity": args.continuity,
-                        "rvq_focus": args.rvq_focus,
-                        "unit": args.unit,
-                        "stride": args.stride,
-                        "top_k": args.top_k,
+                        "temperature": codec_params["temperature"],
+                        "threshold": codec_params["threshold"],
+                        "continuity": codec_params["continuity"],
+                        "rvq_focus": codec_params["rvq_focus"],
+                        "unit": codec_params["unit"],
+                        "stride": codec_params["stride"],
+                        "top_k": codec_params["top_k"],
                         "seed": args.seed,
                     },
                 }
@@ -581,13 +621,13 @@ def evaluate(args: argparse.Namespace) -> None:
                         "matcher": ablation["matcher"],
                         "swap": ablation["swap"],
                         "ablation_id": ab_id,
-                        "temperature": args.temperature,
-                        "threshold": args.threshold,
-                        "continuity": args.continuity,
-                        "rvq_focus": args.rvq_focus,
-                        "unit": args.unit,
-                        "stride": args.stride,
-                        "top_k": args.top_k,
+                        "temperature": codec_params["temperature"],
+                        "threshold": codec_params["threshold"],
+                        "continuity": codec_params["continuity"],
+                        "rvq_focus": codec_params["rvq_focus"],
+                        "unit": codec_params["unit"],
+                        "stride": codec_params["stride"],
+                        "top_k": codec_params["top_k"],
                         "seed": args.seed,
                     }
                     if not args.dry_run:
@@ -722,13 +762,13 @@ def evaluate(args: argparse.Namespace) -> None:
                             "matcher": ablation["matcher"],
                             "swap": ablation["swap"],
                             "ablation_id": ab_id,
-                            "temperature": args.temperature,
-                            "threshold": args.threshold,
-                            "continuity": args.continuity,
-                            "rvq_focus": args.rvq_focus,
-                            "unit": args.unit,
-                            "stride": args.stride,
-                            "top_k": args.top_k,
+                            "temperature": codec_params["temperature"],
+                            "threshold": codec_params["threshold"],
+                            "continuity": codec_params["continuity"],
+                            "rvq_focus": codec_params["rvq_focus"],
+                            "unit": codec_params["unit"],
+                            "stride": codec_params["stride"],
+                            "top_k": codec_params["top_k"],
                             "seed": args.seed,
                         }
                         _run_command_template(args.runner_cmd, det_context)
@@ -1098,7 +1138,7 @@ def evaluate(args: argparse.Namespace) -> None:
             "seed": args.seed,
             "bootstrap": args.bootstrap,
             "determinism_runs": args.determinism_runs,
-            "params": {
+            "params_cli_overrides": {
                 "temperature": args.temperature,
                 "threshold": args.threshold,
                 "continuity": args.continuity,
@@ -1107,6 +1147,7 @@ def evaluate(args: argparse.Namespace) -> None:
                 "stride": args.stride,
                 "top_k": args.top_k,
             },
+            "params_by_codec": {codec_id: _resolve_runtime_params(codec_id, args) for codec_id in selected_codecs},
         },
     )
     print(f"Wrote reports to: {report_dir}")
@@ -1381,13 +1422,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ev.add_argument("--clipping-gate-fraction", type=float, default=1e-4, help="Maximum clipping fraction for health gate.")
     ev.add_argument("--top-n-presets", type=int, default=8, help="Top-N ranked presets exported from evaluation.")
     ev.add_argument("--clip-limit", type=int, default=0, help="Optional cap on number of source_eval clips (0=all).")
-    ev.add_argument("--temperature", type=float, default=0.47)
-    ev.add_argument("--threshold", type=float, default=0.55)
-    ev.add_argument("--continuity", type=float, default=0.93)
-    ev.add_argument("--rvq-focus", dest="rvq_focus", type=float, default=0.30)
-    ev.add_argument("--unit", type=int, default=7)
-    ev.add_argument("--stride", type=int, default=2)
-    ev.add_argument("--top-k", dest="top_k", type=int, default=7)
+    ev.add_argument("--temperature", type=float, default=None, help="Global override (default: tuned per codec)")
+    ev.add_argument("--threshold", type=float, default=None, help="Global override (default: tuned per codec)")
+    ev.add_argument("--continuity", type=float, default=None, help="Global override (default: tuned per codec)")
+    ev.add_argument("--rvq-focus", dest="rvq_focus", type=float, default=None, help="Global override (default: tuned per codec)")
+    ev.add_argument("--unit", type=int, default=None, help="Global override (default: tuned per codec)")
+    ev.add_argument("--stride", type=int, default=None, help="Global override (default: tuned per codec)")
+    ev.add_argument("--top-k", dest="top_k", type=int, default=None, help="Global override (default: tuned per codec)")
     ev.set_defaults(func=evaluate)
 
     search_p = sub.add_parser("search", help="Random-search hyperparameters and rank presets with system-health gates.")
