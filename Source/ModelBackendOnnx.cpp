@@ -119,6 +119,8 @@ bool ModelBackendOnnx::load(const std::string& modelRoot)
     codebookSize_ = static_cast<int>(obj->getProperty("codebook_size"));
     embeddingDimPerCodebook_ = static_cast<int>(obj->getProperty("embedding_dim"));
     embeddingDim_ = embeddingDimPerCodebook_ * numCodebooks_;
+    auto frameRateVar = obj->getProperty("frame_rate_hz");
+    frameRateHz_ = frameRateVar.isVoid() ? 0.0 : static_cast<double>(frameRateVar);
 
     const juce::String embeddingFileName = obj->getProperty("embedding_file", "embeddings.bin");
     const juce::File embeddingFile = root.getChildFile(embeddingFileName);

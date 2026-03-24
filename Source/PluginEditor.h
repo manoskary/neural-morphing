@@ -92,13 +92,16 @@ private:
 
     // Backend selection UI
     juce::ComboBox backendSelector_;
-    juce::Label backendLabel_{ "Backend", "Backend:" };
+    juce::Label backendLabel_{ "Backend", "Backend Policy:" };
+    juce::ComboBox processingModeSelector_;
+    juce::Label processingModeLabel_{ "ProcessingMode", "Processing Mode:" };
     juce::ComboBox bridgeCodecSelector_;
     juce::Label bridgeCodecLabel_{ "BridgeCodec", "Codec:" };
     juce::ComboBox swapModeSelector_;
     juce::Label swapModeLabel_{ "SwapMode", "Swap:" };
     juce::Label statusDisplayLabel_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> backendAttachment_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> processingModeAttachment_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> bridgeCodecAttachment_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> swapModeAttachment_;
 

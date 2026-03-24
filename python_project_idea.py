@@ -22,6 +22,13 @@ from tqdm import tqdm
 from transformers import AutoProcessor, DacModel
 
 
+def _env_flag(name: str, default: str = "0") -> bool:
+    value = os.getenv(name, default)
+    if value is None:
+        return False
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 class LatentGranularSynthesis:
     @staticmethod
     def _select_device(device):
@@ -136,6 +143,15 @@ class LatentGranularSynthesis:
                 ]
             print("Using codec: spectrostream")
             return
+
+        # SpectroStream currently relies on TensorFlow/JAX internals; on low-VRAM GPUs
+        # this frequently fails with libdevice/JIT/OOM errors. Keep CPU as robust default.
+        if not _env_flag("NEURAL_MORPHING_SPECTROSTREAM_USE_GPU", "0"):
+            os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+            os.environ.setdefault("JAX_PLATFORM_NAME", "cpu")
+            os.environ.setdefault("JAX_PLATFORMS", "cpu")
+            os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+            os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
         from magenta_rt import audio as mrt_audio
         from magenta_rt import spectrostream
@@ -313,11 +329,13 @@ class LatentGranularSynthesis:
             frame_major = np.asarray(tokens.T, dtype=np.int32)
             waveform = self.spectro_codec.decode(frame_major)
             samples = np.asarray(waveform.samples, dtype=np.float32)
-            if samples.ndim > 1:
-                samples = librosa.to_mono(samples.T)
+            if samples.ndim == 1:
+                channels_first = samples[np.newaxis, :]
+            else:
+                channels_first = np.ascontiguousarray(samples.T, dtype=np.float32)
 
-            # Return a DAC-like payload for downstream compatibility.
-            audio_values = torch.from_numpy(np.ascontiguousarray(samples[np.newaxis, np.newaxis, :], dtype=np.float32))
+            # Return a DAC-like payload for downstream compatibility ([B, C, T]).
+            audio_values = torch.from_numpy(np.ascontiguousarray(channels_first[np.newaxis, :, :], dtype=np.float32))
             return SimpleNamespace(audio_values=audio_values)
 
         return None
@@ -981,8 +999,20 @@ def morph_audio_with_mix(target_file, dry_wet):
     dry = np.zeros_like(wet_arr, dtype=np.float32)
     target_path = _get_synth()._resolve_file_entry(target_file)
     if target_path is not None and target_path.exists():
-        dry_audio, _ = librosa.load(str(target_path), sr=sr, mono=True)
-        n = min(len(dry_audio), len(wet_arr))
+        wet_is_stereo = wet_arr.ndim == 2 and wet_arr.shape[1] > 1
+        dry_audio, _ = librosa.load(str(target_path), sr=sr, mono=not wet_is_stereo)
+        dry_audio = np.asarray(dry_audio, dtype=np.float32)
+        if wet_is_stereo:
+            if dry_audio.ndim == 1:
+                dry_audio = np.repeat(dry_audio[:, np.newaxis], wet_arr.shape[1], axis=1)
+            elif dry_audio.ndim == 2 and dry_audio.shape[0] < dry_audio.shape[1]:
+                dry_audio = dry_audio.T
+            if dry_audio.shape[1] > wet_arr.shape[1]:
+                dry_audio = dry_audio[:, : wet_arr.shape[1]]
+            elif dry_audio.shape[1] < wet_arr.shape[1]:
+                reps = [dry_audio[:, min(i, dry_audio.shape[1] - 1)] for i in range(wet_arr.shape[1])]
+                dry_audio = np.stack(reps, axis=1)
+        n = min(dry_audio.shape[0], wet_arr.shape[0])
         dry[:n] = dry_audio[:n]
         wet_arr = wet_arr[:n]
         dry = dry[:n]

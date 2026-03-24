@@ -25,7 +25,7 @@ A JUCE-based VST3/AU insert effect that morphs incoming audio into a palette of 
 **Standalone**
 1. Load target files to build the palette.
 2. Load a source audio file (standalone UI) to drive morphing.
-3. Playback runs through the file once; reload to replay.
+3. Playback loops continuously while processing through the active mode/backend policy.
 
 ## UI Sketch
 
@@ -34,6 +34,8 @@ A JUCE-based VST3/AU insert effect that morphs incoming audio into a palette of 
 [Load Source Audio] [Clear Source]  Source: <filename>   (standalone only)
 Status: <palette status>                         Progress: <percent>
 Backend: Native / Python Bridge
+Processing Mode: Quality Parity / Live Realtime
+Backend Policy: Native Preferred (+ Bridge Fallback) / Bridge Only / Native Only
 Bridge Codec: DAC / SpectroStream
 Knobs: Temperature | Threshold | Continuity | RVQ Focus | Unit | Stride | Similarity | Envelope | Dry/Wet | Output
 ```
@@ -115,6 +117,12 @@ Environment variables (bridge):
 Environment variables (plugin realtime tuning):
 - `NEURAL_MORPHING_RT_UPDATE_MS` (override morph update interval in ms)
 - `NEURAL_MORPHING_RT_ENCODE_WINDOW_MS` (override rolling encode window in ms; useful for heavier codecs such as SpectroStream)
+- `NEURAL_MORPHING_QUALITY_LOOKAHEAD_MS` (quality-parity lookahead, default `1000`)
+- `NEURAL_MORPHING_QUALITY_SUPERFRAME` (quality-parity superframe samples, default `32768`)
+- `NEURAL_MORPHING_QUALITY_HOP` (quality-parity hop samples, default `8192`)
+- `NEURAL_MORPHING_QUALITY_CROSSFADE` (quality-parity overlap/crossfade samples, default `4096`)
+- `NEURAL_MORPHING_LIVE_CANDIDATES` (live mode candidate cap, default `48`)
+- `NEURAL_MORPHING_LIVE_BEAM` (live mode beam width cap, default `6`)
 
 For SpectroStream support, install Magenta RT and dependencies in your bridge environment:
 ```bash
@@ -131,6 +139,8 @@ Current tuned defaults (used by app/standalone + Python demo):
 - `unit=7`
 - `stride=2`
 - `top_k=7`
+- `matcher=beam`
+- `swap=full_layer`
 
 Prepare a deterministic manifest:
 ```bash
@@ -147,6 +157,8 @@ Run the 4-ablation matrix and compute metrics:
 python tools/evaluate_morphing.py evaluate \
   --manifest /tmp/neural_morph_manifest.json \
   --output-dir /tmp/neural_morph_eval \
+  --envelope-corr-gate 0.90 \
+  --clipping-gate-fraction 0.0001 \
   --runner-cmd "./.venv/bin/python tools/run_morph_ablation.py --codec {codec} --palette-manifest {palette_manifest} --source {source} --output-wav {output_wav} --tokens-npy {tokens_npy} --match-indices-npy {match_indices_npy} --latency-json {latency_json} --matcher {matcher} --swap {swap} --temperature {temperature} --threshold {threshold} --continuity {continuity} --rvq-focus {rvq_focus} --unit {unit} --stride {stride} --top-k {top_k} --seed {seed}"
 ```
 
@@ -169,7 +181,21 @@ Random-search presets:
 python tools/evaluate_morphing.py search \
   --manifest /tmp/neural_morph_manifest.json \
   --output-dir /tmp/neural_morph_search \
+  --envelope-corr-gate 0.90 \
+  --clipping-gate-fraction 0.0001 \
   --runner-cmd "./.venv/bin/python tools/run_morph_ablation.py --codec {codec} --palette-manifest {palette_manifest} --source {source} --output-wav {output_wav} --tokens-npy {tokens_npy} --match-indices-npy {match_indices_npy} --latency-json {latency_json} --matcher {matcher} --swap {swap} --temperature {temperature} --threshold {threshold} --continuity {continuity} --rvq-focus {rvq_focus} --unit {unit} --stride {stride} --top-k {top_k} --seed {seed}"
+```
+
+Realtime parity comparison (Python full-context vs chunked proxy, optional plugin render):
+```bash
+python tools/compare_realtime_parity.py \
+  --palette-manifest /tmp/palette_train.txt \
+  --source /path/to/source.wav \
+  --output-dir /tmp/neural_morph_parity \
+  --codec dac \
+  --matcher beam \
+  --swap full_layer \
+  --chunk-samples 32768
 ```
 
 Interactive dashboard:

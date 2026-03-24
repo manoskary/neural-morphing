@@ -279,6 +279,13 @@ def metric_boundary_phase_jump(audio: np.ndarray, sample_rate: int, boundaries_s
     return float(np.mean(jumps))
 
 
+def metric_clipping_fraction(audio: np.ndarray, threshold: float = 0.999) -> float:
+    arr = np.asarray(audio, dtype=np.float32)
+    if arr.size == 0:
+        return float("nan")
+    return float(np.mean(np.abs(arr.reshape(-1)) >= float(threshold)))
+
+
 def metric_fad(reference_wavs: List[Path], generated_wavs: List[Path], model_name: str = "vggish") -> dict:
     try:
         from frechet_audio_distance import FrechetAudioDistance  # type: ignore
@@ -656,6 +663,7 @@ def evaluate(args: argparse.Namespace) -> None:
                 log_spectral_dist = metric_log_spectral_distance(out_audio, ref_audio, out_sr)
                 envelope_corr = metric_envelope_correlation(out_audio, src_audio)
                 phase_jump = metric_boundary_phase_jump(out_audio, out_sr, boundaries)
+                clipping_fraction = metric_clipping_fraction(out_audio)
 
                 latency_payload = {}
                 if latency_json.exists():
@@ -757,6 +765,7 @@ def evaluate(args: argparse.Namespace) -> None:
                     "log_spectral_distance": log_spectral_dist,
                     "envelope_correlation": envelope_corr,
                     "boundary_phase_jump": phase_jump,
+                    "clipping_fraction": clipping_fraction,
                     "encode_ok": float(encode_ok),
                     "decode_ok": float(decode_ok),
                     "token_layout_valid": float(token_layout_valid),
@@ -881,6 +890,12 @@ def evaluate(args: argparse.Namespace) -> None:
                 "token_layout_valid_rate": _mean(float(r["token_layout_valid"]) for r in cond_rows),
                 "channel_consistency_rate": _mean(float(r["channel_consistency_ok"]) for r in cond_rows),
                 "determinism_pass_rate": _mean(float(r["determinism_pass"]) for r in cond_rows),
+                "envelope_correlation_mean": _mean(float(r["envelope_correlation"]) for r in cond_rows),
+                "clipping_fraction_max": (
+                    float(np.max([_to_float(r.get("clipping_fraction", float("nan"))) for r in cond_rows if not math.isnan(_to_float(r.get("clipping_fraction", float("nan"))))]))
+                    if any(not math.isnan(_to_float(r.get("clipping_fraction", float("nan")))) for r in cond_rows)
+                    else float("nan")
+                ),
                 "duration_drift_abs_ms_p95": (
                     float(np.percentile([abs(float(r["duration_drift_ms"])) for r in cond_rows if not math.isnan(float(r["duration_drift_ms"]))], 95))
                     if any(not math.isnan(float(r["duration_drift_ms"])) for r in cond_rows)
@@ -911,6 +926,14 @@ def evaluate(args: argparse.Namespace) -> None:
             and (
                 math.isnan(_to_float(h.get("determinism_pass_rate", float("nan"))))
                 or _to_float(h.get("determinism_pass_rate", float("nan"))) >= float(args.determinism_gate_rate)
+            )
+            and (
+                math.isnan(_to_float(h.get("envelope_correlation_mean", float("nan"))))
+                or _to_float(h.get("envelope_correlation_mean", float("nan"))) >= float(args.envelope_corr_gate)
+            )
+            and (
+                math.isnan(_to_float(h.get("clipping_fraction_max", float("nan"))))
+                or _to_float(h.get("clipping_fraction_max", float("nan"))) <= float(args.clipping_gate_fraction)
             )
         )
         summary["system_health"]["gates"][key] = {"pass": bool(gate_pass)}
@@ -1031,6 +1054,7 @@ def evaluate(args: argparse.Namespace) -> None:
         "log_spectral_distance",
         "envelope_correlation",
         "boundary_phase_jump",
+        "clipping_fraction",
         "encode_ok",
         "decode_ok",
         "token_layout_valid",
@@ -1102,6 +1126,8 @@ def _make_evaluate_namespace(base_args: argparse.Namespace, output_dir: Path, pa
         determinism_runs=base_args.determinism_runs,
         duration_drift_gate_ms=base_args.duration_drift_gate_ms,
         determinism_gate_rate=base_args.determinism_gate_rate,
+        envelope_corr_gate=base_args.envelope_corr_gate,
+        clipping_gate_fraction=base_args.clipping_gate_fraction,
         top_n_presets=base_args.top_n_presets,
         clip_limit=base_args.clip_limit,
         temperature=params["temperature"],
@@ -1204,6 +1230,8 @@ def validate(args: argparse.Namespace) -> None:
             layout_rate = _mean(_to_float(r.get("token_layout_valid", float("nan"))) for r in ok)
             det_rate = _mean(_to_float(r.get("determinism_pass", float("nan"))) for r in ok)
             drift_vals = [abs(_to_float(r.get("duration_drift_ms", float("nan")))) for r in ok if not math.isnan(_to_float(r.get("duration_drift_ms", float("nan"))))]
+            env_corr = _mean(_to_float(r.get("envelope_correlation", float("nan"))) for r in ok)
+            clip_vals = [_to_float(r.get("clipping_fraction", float("nan"))) for r in ok if not math.isnan(_to_float(r.get("clipping_fraction", float("nan"))))]
             result["runs_health"] = {
                 "rows_total": total,
                 "rows_ok": len(ok),
@@ -1212,6 +1240,8 @@ def validate(args: argparse.Namespace) -> None:
                 "token_layout_valid_rate": layout_rate,
                 "determinism_pass_rate": det_rate,
                 "duration_drift_abs_ms_p95": float(np.percentile(drift_vals, 95)) if drift_vals else float("nan"),
+                "envelope_correlation_mean": env_corr,
+                "clipping_fraction_max": float(np.max(clip_vals)) if clip_vals else float("nan"),
             }
         else:
             result["runs_health"] = {"status": "missing_per_clip_metrics_csv", "path": str(csv_path)}
@@ -1347,6 +1377,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ev.add_argument("--determinism-runs", type=int, default=2, help="Repeated runs per condition/clip for determinism check.")
     ev.add_argument("--duration-drift-gate-ms", type=float, default=120.0, help="Gate threshold for duration drift abs p95.")
     ev.add_argument("--determinism-gate-rate", type=float, default=1.0, help="Gate threshold for determinism pass rate.")
+    ev.add_argument("--envelope-corr-gate", type=float, default=0.90, help="Minimum envelope correlation mean for health gate.")
+    ev.add_argument("--clipping-gate-fraction", type=float, default=1e-4, help="Maximum clipping fraction for health gate.")
     ev.add_argument("--top-n-presets", type=int, default=8, help="Top-N ranked presets exported from evaluation.")
     ev.add_argument("--clip-limit", type=int, default=0, help="Optional cap on number of source_eval clips (0=all).")
     ev.add_argument("--temperature", type=float, default=0.47)
@@ -1370,6 +1402,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     search_p.add_argument("--determinism-runs", type=int, default=2)
     search_p.add_argument("--duration-drift-gate-ms", type=float, default=120.0)
     search_p.add_argument("--determinism-gate-rate", type=float, default=1.0)
+    search_p.add_argument("--envelope-corr-gate", type=float, default=0.90)
+    search_p.add_argument("--clipping-gate-fraction", type=float, default=1e-4)
     search_p.add_argument("--top-n-presets", type=int, default=8)
     search_p.add_argument("--clip-limit", type=int, default=0)
     search_p.add_argument("--dry-run", action="store_true")

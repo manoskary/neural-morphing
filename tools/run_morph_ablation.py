@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import random
 import sys
 from pathlib import Path
@@ -17,8 +18,6 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-
-from python_project_idea import LatentGranularSynthesis
 
 
 def _read_palette_manifest(path: Path) -> list[str]:
@@ -46,7 +45,7 @@ def main() -> None:
     parser.add_argument("--model", default="descript/dac_44khz", help="DAC model name/path")
     parser.add_argument("--codec", choices=["dac", "spectrostream"], default="dac")
     parser.add_argument("--matcher", choices=["greedy", "beam"], default="beam")
-    parser.add_argument("--swap", choices=["full_layer", "rvq_group"], default="rvq_group")
+    parser.add_argument("--swap", choices=["full_layer", "rvq_group"], default="full_layer")
     parser.add_argument("--seed", type=int, default=1234, help="Deterministic seed")
     parser.add_argument("--temperature", type=float, default=0.47)
     parser.add_argument("--threshold", type=float, default=0.55)
@@ -56,6 +55,32 @@ def main() -> None:
     parser.add_argument("--stride", type=int, default=2)
     parser.add_argument("--top-k", type=int, default=7)
     args = parser.parse_args()
+
+    use_torch_cuda = str(os.getenv("NEURAL_MORPHING_USE_TORCH_CUDA", "0")).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if not use_torch_cuda:
+        os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
+    if args.codec == "spectrostream":
+        use_gpu = str(os.getenv("NEURAL_MORPHING_SPECTROSTREAM_USE_GPU", "0")).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        if not use_gpu:
+            os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+            os.environ.setdefault("JAX_PLATFORM_NAME", "cpu")
+            os.environ.setdefault("JAX_PLATFORMS", "cpu")
+            os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+            os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
+    from python_project_idea import LatentGranularSynthesis
+
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -65,13 +90,8 @@ def main() -> None:
     palette_manifest = Path(args.palette_manifest)
     palette_files = _read_palette_manifest(palette_manifest)
 
-    if args.codec != "dac":
-        raise RuntimeError(
-            "tools/run_morph_ablation.py currently supports codec='dac'. "
-            "For spectrostream runs, provide a custom --runner-cmd that supports that codec."
-        )
-
     synth = LatentGranularSynthesis(model_name=args.model)
+    synth.set_codec(args.codec)
     synth.set_temperature(args.temperature, args.threshold)
     synth.set_matching(args.continuity, args.rvq_focus)
     synth.set_unit(args.unit, args.stride)

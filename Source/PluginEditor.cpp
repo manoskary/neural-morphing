@@ -204,18 +204,24 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     // Setup backend selector
     addAndMakeVisible(backendSelector_);
     addAndMakeVisible(backendLabel_);
+    addAndMakeVisible(processingModeSelector_);
+    addAndMakeVisible(processingModeLabel_);
     addAndMakeVisible(bridgeCodecSelector_);
     addAndMakeVisible(bridgeCodecLabel_);
     addAndMakeVisible(swapModeSelector_);
     addAndMakeVisible(swapModeLabel_);
     addAndMakeVisible(statusDisplayLabel_);
     
-    backendSelector_.addItem("Native", 1);
-#if NM_WITH_PYBRIDGE
-    backendSelector_.addItem("Python Bridge", 2);
-#endif
-    
+    backendSelector_.addItem("Native Preferred (+ Bridge Fallback)", 1);
+    backendSelector_.addItem("Bridge Only", 2);
+    backendSelector_.addItem("Native Only", 3);
+
     backendAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor_.parameters, "backend", backendSelector_);
+
+    processingModeSelector_.addItem("Quality Parity", 1);
+    processingModeSelector_.addItem("Live Realtime", 2);
+    processingModeAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        processor_.parameters, "processingMode", processingModeSelector_);
 
     bridgeCodecSelector_.addItem("DAC", 1);
     bridgeCodecSelector_.addItem("SpectroStream", 2);
@@ -227,6 +233,8 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     
     backendLabel_.attachToComponent(&backendSelector_, true);
     backendLabel_.setColour(juce::Label::textColourId, textGrey);
+    processingModeLabel_.attachToComponent(&processingModeSelector_, true);
+    processingModeLabel_.setColour(juce::Label::textColourId, textGrey);
     bridgeCodecLabel_.attachToComponent(&bridgeCodecSelector_, true);
     bridgeCodecLabel_.setColour(juce::Label::textColourId, textGrey);
     swapModeLabel_.attachToComponent(&swapModeSelector_, true);
@@ -253,6 +261,7 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     loadSourceButton_.addListener(this);
     clearSourceButton_.addListener(this);
     backendSelector_.addListener(this);
+    processingModeSelector_.addListener(this);
     bridgeCodecSelector_.addListener(this);
     swapModeSelector_.addListener(this);
 
@@ -269,6 +278,7 @@ NeuralMorphingAudioProcessorEditor::~NeuralMorphingAudioProcessorEditor()
     loadSourceButton_.removeListener(this);
     clearSourceButton_.removeListener(this);
     backendSelector_.removeListener(this);
+    processingModeSelector_.removeListener(this);
     bridgeCodecSelector_.removeListener(this);
     swapModeSelector_.removeListener(this);
 }
@@ -440,14 +450,17 @@ void NeuralMorphingAudioProcessorEditor::resized()
         currentY += 32 + 4;
     }
 
-    // Backend selector row
+    // Backend policy + processing mode row.
     juce::Rectangle<int> backendArea(controlsX, currentY, controlsWidth, 32);
-    backendSelector_.setBounds(backendArea.removeFromLeft(220).reduced(2));
+    constexpr int comboGap = 12;
+    const int policyWidth = juce::jmax(260, juce::jmin(380, (backendArea.getWidth() - comboGap) / 2));
+    backendSelector_.setBounds(backendArea.removeFromLeft(policyWidth).reduced(2));
+    backendArea.removeFromLeft(comboGap);
+    processingModeSelector_.setBounds(backendArea.removeFromLeft(policyWidth).reduced(2));
     currentY += 32 + 4;
 
-    // Bridge codec + swap row (side-by-side)
+    // Codec + swap row (side-by-side, intentionally not under backend policy).
     juce::Rectangle<int> codecSwapArea(controlsX, currentY, controlsWidth, 32);
-    constexpr int comboGap = 12;
     const int comboWidth = juce::jmax(180, juce::jmin(260, (codecSwapArea.getWidth() - comboGap) / 2));
     bridgeCodecSelector_.setBounds(codecSwapArea.removeFromLeft(comboWidth).reduced(2));
     codecSwapArea.removeFromLeft(comboGap);
@@ -658,6 +671,12 @@ void NeuralMorphingAudioProcessorEditor::comboBoxChanged(juce::ComboBox* comboBo
     {
         int backendIndex = backendSelector_.getSelectedItemIndex();
         processor_.switchBackend(backendIndex);
+    }
+    else if (comboBox == &processingModeSelector_)
+    {
+        int modeIndex = processingModeSelector_.getSelectedItemIndex();
+        processor_.setProcessingMode(modeIndex);
+        processor_.invalidateMorphCache();
     }
     else if (comboBox == &bridgeCodecSelector_)
     {

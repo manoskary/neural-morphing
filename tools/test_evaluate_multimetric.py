@@ -18,6 +18,7 @@ if str(THIS_DIR) not in sys.path:
 from evaluate_morphing import (
     ClipEntry,
     _check_manifest_leakage,
+    metric_clipping_fraction,
     metric_envelope_correlation,
     metric_log_spectral_distance,
     metric_spectral_convergence,
@@ -64,6 +65,15 @@ class MultiMetricTests(unittest.TestCase):
             report = _check_manifest_leakage([palette_wav], clips)
             self.assertFalse(report["ok"])
             self.assertGreaterEqual(len(report["hash_overlap_palette_source"]), 1)
+
+    def test_clipping_fraction(self):
+        unclipped = np.linspace(-0.8, 0.8, 1000, dtype=np.float32)
+        clipped = np.clip(np.linspace(-1.2, 1.2, 1000, dtype=np.float32), -1.0, 1.0)
+        frac_unclipped = metric_clipping_fraction(unclipped)
+        frac_clipped = metric_clipping_fraction(clipped)
+        self.assertTrue(np.isfinite(frac_unclipped))
+        self.assertTrue(np.isfinite(frac_clipped))
+        self.assertLess(frac_unclipped, frac_clipped)
 
 
 if __name__ == "__main__":

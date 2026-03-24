@@ -145,10 +145,14 @@ def main() -> None:
 
     dummy_wave = torch.zeros(1, args.sample_length, dtype=torch.float32, device=device)
     dummy_tokens = torch.zeros(embedding_info["num_codebooks"], args.sample_length // 256 + 1, dtype=torch.long, device=device)
+    with torch.no_grad():
+        one_second_wave = torch.zeros(1, sample_rate, dtype=torch.float32, device=device)
+        frame_rate_hz = float(model.encode(one_second_wave).audio_codes.shape[-1])
 
     metadata = {
         "model": args.model,
         "sample_rate": sample_rate,
+        "frame_rate_hz": frame_rate_hz,
         **embedding_info,
     }
 
