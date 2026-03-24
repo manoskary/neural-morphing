@@ -111,6 +111,7 @@ void NeuralMorphingAudioProcessor::prepareToPlay(double sampleRate, int samplesP
     hasLastRealtimeMorphBlock_ = false;
     lastRealtimeMorphBlock_.setSize(0, 0);
     lastRealtimeMorphReadPosition_ = 0;
+    morphLevelGain_ = 1.0f;
     outputSafetyGain_ = 1.0f;
 
     onsetDetector_.prepare(sampleRate, 512, 256);
@@ -248,6 +249,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
         targetSegments_.clear();
         hasLastRealtimeMorphBlock_ = false;
         lastRealtimeMorphReadPosition_ = 0;
+        morphLevelGain_ = 1.0f;
         morphUpdateCountdownSamples_ = 0;
         decodedFifo_.clear();
         realtimeInputHistory_.clear();
@@ -296,6 +298,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
                 targetSegments_.clear();
             hasLastRealtimeMorphBlock_ = false;
             lastRealtimeMorphReadPosition_ = 0;
+            morphLevelGain_ = 1.0f;
             decodedFifo_.clear();
             realtimeInputHistory_.clear();
             realtimeInputFilledSamples_ = 0;
@@ -351,6 +354,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
                 targetSegments_.clear();
                 hasLastRealtimeMorphBlock_ = false;
                 lastRealtimeMorphReadPosition_ = 0;
+                morphLevelGain_ = 1.0f;
                 decodedFifo_.clear();
                 realtimeInputHistory_.clear();
                 realtimeInputFilledSamples_ = 0;
@@ -438,6 +442,7 @@ void NeuralMorphingAudioProcessor::invalidateMorphCache()
     hasLastRealtimeMorphBlock_ = false;
     lastRealtimeMorphBlock_.setSize(0, 0);
     lastRealtimeMorphReadPosition_ = 0;
+    morphLevelGain_ = 1.0f;
     morphUpdateCountdownSamples_ = 0;
     realtimeInputHistory_.clear();
     realtimeInputFilledSamples_ = 0;
@@ -602,13 +607,19 @@ void NeuralMorphingAudioProcessor::applySafetyLimiter(juce::AudioBuffer<float>& 
             peak = std::max(peak, std::abs(data[i]));
     }
 
+    if (peak < 1.0e-5f)
+    {
+        outputSafetyGain_ = 1.0f;
+        return;
+    }
+
     constexpr float targetPeak = 0.98f;
     const float desiredGain = (peak > targetPeak && peak > 0.0f) ? (targetPeak / peak) : 1.0f;
-    const float attack = 0.35f;
-    const float release = 0.02f;
+    const float attack = 0.45f;
+    const float release = 0.08f;
     const float coeff = (desiredGain < outputSafetyGain_) ? attack : release;
     outputSafetyGain_ += coeff * (desiredGain - outputSafetyGain_);
-    outputSafetyGain_ = juce::jlimit(0.05f, 1.0f, outputSafetyGain_);
+    outputSafetyGain_ = juce::jlimit(0.10f, 1.0f, outputSafetyGain_);
 
     for (int ch = 0; ch < numChannels; ++ch)
     {
@@ -1078,6 +1089,43 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
     const int morphSamples = morphed.getNumSamples();
     const int readStart = juce::jlimit(0, juce::jmax(0, morphSamples), lastRealtimeMorphReadPosition_);
 
+    // Keep wet level close to dry level to avoid perceived loudness jumps.
+    double dryEnergy = 0.0;
+    double morphEnergy = 0.0;
+    int levelCount = 0;
+    for (int ch = 0; ch < totalNumOutputChannels; ++ch)
+    {
+        const int morphCh = juce::jmin(ch, morphed.getNumChannels() - 1);
+        const int dryCh = juce::jmin(ch, dryBuffer.getNumChannels() - 1);
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            const int morphLinearIndex = readStart + sample;
+            if (morphLinearIndex >= morphSamples)
+                break;
+
+            const float drySample = dryBuffer.getSample(dryCh, sample);
+            const float morphSample = morphed.getSample(morphCh, morphLinearIndex);
+            dryEnergy += static_cast<double>(drySample) * static_cast<double>(drySample);
+            morphEnergy += static_cast<double>(morphSample) * static_cast<double>(morphSample);
+            ++levelCount;
+        }
+    }
+
+    float desiredLevelGain = 1.0f;
+    if (levelCount > 0)
+    {
+        const float dryRms = std::sqrt(static_cast<float>(dryEnergy / static_cast<double>(levelCount)));
+        const float morphRms = std::sqrt(static_cast<float>(morphEnergy / static_cast<double>(levelCount)));
+        if (dryRms > 1.0e-4f && morphRms > 1.0e-4f)
+            desiredLevelGain = juce::jlimit(0.5f, 2.0f, dryRms / morphRms);
+    }
+
+    const float levelAttack = 0.20f;
+    const float levelRelease = 0.08f;
+    const float levelCoeff = (desiredLevelGain < morphLevelGain_) ? levelAttack : levelRelease;
+    morphLevelGain_ += levelCoeff * (desiredLevelGain - morphLevelGain_);
+    morphLevelGain_ = juce::jlimit(0.5f, 2.0f, morphLevelGain_);
+
     for (int ch = 0; ch < totalNumOutputChannels; ++ch)
     {
         const int morphCh = juce::jmin(ch, morphed.getNumChannels() - 1);
@@ -1091,6 +1139,7 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
             float morphSample = drySample;
             if (morphLinearIndex < morphSamples)
                 morphSample = morphed.getSample(morphCh, morphLinearIndex);
+            morphSample *= morphLevelGain_;
             if (useSmoothing)
             {
                 morphSample = (1.0f - smoothingAlpha) * morphSample + smoothingAlpha * prevSmoothed;

@@ -445,14 +445,13 @@ void NeuralMorphingAudioProcessorEditor::resized()
     backendSelector_.setBounds(backendArea.removeFromLeft(220).reduced(2));
     currentY += 32 + 4;
 
-    // Bridge codec row
-    juce::Rectangle<int> bridgeCodecArea(controlsX, currentY, controlsWidth, 32);
-    bridgeCodecSelector_.setBounds(bridgeCodecArea.removeFromLeft(220).reduced(2));
-    currentY += 32 + 4;
-
-    // Swap mode row
-    juce::Rectangle<int> swapModeArea(controlsX, currentY, controlsWidth, 32);
-    swapModeSelector_.setBounds(swapModeArea.removeFromLeft(220).reduced(2));
+    // Bridge codec + swap row (side-by-side)
+    juce::Rectangle<int> codecSwapArea(controlsX, currentY, controlsWidth, 32);
+    constexpr int comboGap = 12;
+    const int comboWidth = juce::jmax(180, juce::jmin(260, (codecSwapArea.getWidth() - comboGap) / 2));
+    bridgeCodecSelector_.setBounds(codecSwapArea.removeFromLeft(comboWidth).reduced(2));
+    codecSwapArea.removeFromLeft(comboGap);
+    swapModeSelector_.setBounds(codecSwapArea.removeFromLeft(comboWidth).reduced(2));
     currentY += 32 + 4;
 
     // Backend status row

@@ -136,6 +136,7 @@ private:
     juce::AudioBuffer<float> lastRealtimeMorphBlock_;
     bool hasLastRealtimeMorphBlock_ = false;
     int lastRealtimeMorphReadPosition_ = 0;
+    float morphLevelGain_ = 1.0f;
     float outputSafetyGain_ = 1.0f;
     std::thread realtimeWorkerThread_;
     std::atomic<bool> realtimeWorkerShouldExit_{ false };
