@@ -35,6 +35,44 @@ from tools.evaluate_morphing import (  # noqa: E402
     metric_waveform_discontinuity,
 )
 
+TUNED_CODEC_PARAMS = {
+    "dac": {
+        "temperature": 0.47,
+        "threshold": 0.55,
+        "continuity": 0.93,
+        "rvq_focus": 0.30,
+        "unit": 7,
+        "stride": 2,
+        "top_k": 7,
+    },
+    "spectrostream": {
+        "temperature": 0.4315336855083648,
+        "threshold": 0.24313963041725395,
+        "continuity": 0.7887727172362835,
+        "rvq_focus": 0.3460889655971231,
+        "unit": 2,
+        "stride": 2,
+        "top_k": 8,
+    },
+}
+
+
+def _codec_defaults(codec_id: str) -> dict:
+    return dict(TUNED_CODEC_PARAMS.get((codec_id or "dac").strip().lower(), TUNED_CODEC_PARAMS["dac"]))
+
+
+def _resolve_runtime_params(codec_id: str, args: argparse.Namespace) -> dict:
+    defaults = _codec_defaults(codec_id)
+    return {
+        "temperature": float(args.temperature) if args.temperature is not None else float(defaults["temperature"]),
+        "threshold": float(args.threshold) if args.threshold is not None else float(defaults["threshold"]),
+        "continuity": float(args.continuity) if args.continuity is not None else float(defaults["continuity"]),
+        "rvq_focus": float(args.rvq_focus) if args.rvq_focus is not None else float(defaults["rvq_focus"]),
+        "unit": int(args.unit) if args.unit is not None else int(defaults["unit"]),
+        "stride": int(args.stride) if args.stride is not None else int(defaults["stride"]),
+        "top_k": int(args.top_k) if args.top_k is not None else int(defaults["top_k"]),
+    }
+
 
 def _read_manifest(path: Path) -> list[str]:
     if not path.exists():
@@ -100,16 +138,17 @@ def main() -> None:
     parser.add_argument("--codec", choices=["dac", "spectrostream"], default="dac")
     parser.add_argument("--matcher", choices=["beam", "greedy"], default="beam")
     parser.add_argument("--swap", choices=["full_layer", "rvq_group"], default="full_layer")
-    parser.add_argument("--temperature", type=float, default=0.47)
-    parser.add_argument("--threshold", type=float, default=0.55)
-    parser.add_argument("--continuity", type=float, default=0.93)
-    parser.add_argument("--rvq-focus", dest="rvq_focus", type=float, default=0.30)
-    parser.add_argument("--unit", type=int, default=7)
-    parser.add_argument("--stride", type=int, default=2)
-    parser.add_argument("--top-k", dest="top_k", type=int, default=7)
+    parser.add_argument("--temperature", type=float, default=None, help="Override (default: tuned per codec)")
+    parser.add_argument("--threshold", type=float, default=None, help="Override (default: tuned per codec)")
+    parser.add_argument("--continuity", type=float, default=None, help="Override (default: tuned per codec)")
+    parser.add_argument("--rvq-focus", dest="rvq_focus", type=float, default=None, help="Override (default: tuned per codec)")
+    parser.add_argument("--unit", type=int, default=None, help="Override (default: tuned per codec)")
+    parser.add_argument("--stride", type=int, default=None, help="Override (default: tuned per codec)")
+    parser.add_argument("--top-k", dest="top_k", type=int, default=None, help="Override (default: tuned per codec)")
     parser.add_argument("--chunk-samples", type=int, default=32768)
     parser.add_argument("--plugin-render-wav", default="", help="Optional exported standalone/VST render WAV for direct comparison.")
     args = parser.parse_args()
+    runtime_params = _resolve_runtime_params(args.codec, args)
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -117,10 +156,10 @@ def main() -> None:
 
     synth = LatentGranularSynthesis(model_name=args.model)
     synth.set_codec(args.codec)
-    synth.set_temperature(args.temperature, args.threshold)
-    synth.set_matching(args.continuity, args.rvq_focus)
-    synth.set_unit(args.unit, args.stride)
-    synth.set_topk(args.top_k)
+    synth.set_temperature(runtime_params["temperature"], runtime_params["threshold"])
+    synth.set_matching(runtime_params["continuity"], runtime_params["rvq_focus"])
+    synth.set_unit(runtime_params["unit"], runtime_params["stride"])
+    synth.set_topk(runtime_params["top_k"])
     synth.set_ablation(args.matcher, args.swap)
 
     build = synth.build_dataset(palette_files, aug_checkbox=False)
@@ -176,13 +215,13 @@ def main() -> None:
             "codec": args.codec,
             "matcher": args.matcher,
             "swap": args.swap,
-            "temperature": args.temperature,
-            "threshold": args.threshold,
-            "continuity": args.continuity,
-            "rvq_focus": args.rvq_focus,
-            "unit": args.unit,
-            "stride": args.stride,
-            "top_k": args.top_k,
+            "temperature": runtime_params["temperature"],
+            "threshold": runtime_params["threshold"],
+            "continuity": runtime_params["continuity"],
+            "rvq_focus": runtime_params["rvq_focus"],
+            "unit": runtime_params["unit"],
+            "stride": runtime_params["stride"],
+            "top_k": runtime_params["top_k"],
             "chunk_samples": chunk_samples,
         },
         "paths": {

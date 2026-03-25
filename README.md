@@ -163,6 +163,33 @@ Reports are written to `.../reports/` with:
 - reproducibility JSON
 - ranked presets JSON (gated by system-health checks)
 
+Paper protocol automation (`audit-data`, `run`, `aggregate`, `parity-sweep`):
+```bash
+python tools/paper_eval_protocol.py run \
+  --palette-dir /data/palette_train \
+  --source-dir /data/source_eval \
+  --reference-dir /data/original_refs \
+  --output-root artifacts/validation/paper_eval \
+  --seeds 1234,2234,3234
+```
+
+Aggregate existing run directories into paper-ready tables/figures:
+```bash
+python tools/paper_eval_protocol.py aggregate \
+  --run-dirs artifacts/validation/paper_eval/seed_1234 artifacts/validation/paper_eval/seed_2234 artifacts/validation/paper_eval/seed_3234 \
+  --output-dir artifacts/validation/paper_eval/paper_reports
+```
+
+Realtime parity sweep across chunk sizes:
+```bash
+python tools/paper_eval_protocol.py parity-sweep \
+  --palette-manifest artifacts/validation/paper_eval/seed_1234/palette_train.txt \
+  --manifest artifacts/validation/paper_eval/paper_manifest.json \
+  --output-dir artifacts/validation/paper_eval/parity_sweep \
+  --codec dac \
+  --chunk-sizes 8192,16384,32768
+```
+
 Framework validation report:
 ```bash
 python tools/evaluate_morphing.py validate \
