@@ -1,7 +1,5 @@
 torch>=2.1
 transformers>=4.38
-onnx>=1.15
-onnxruntime>=1.16
 numpy>=1.24
 scipy>=1.11
 librosa>=0.10

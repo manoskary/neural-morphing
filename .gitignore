@@ -23,6 +23,7 @@ __pycache__/
 # Virtual environments
 venv/
 env/
+.venv*/
 
 # Temporary files
 *.tmp
@@ -31,6 +32,8 @@ env/
 /build/
 /build_nopy/
 /artifacts/
+/outputs/
+.pytest_cache/
 
 # any wave files
 *.wav
@@ -38,3 +41,5 @@ env/
 *.flac
 *.m4a
 *.aac
+*.aif
+*.aiff

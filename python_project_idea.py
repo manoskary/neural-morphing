@@ -1199,7 +1199,14 @@ def _build_demo():
 def main():
     _get_synth()
     demo = _build_demo()
-    demo.launch(show_error=True)
+    launch_kwargs = {"show_error": True}
+    server_name = os.getenv("GRADIO_SERVER_NAME")
+    server_port = os.getenv("PORT") or os.getenv("GRADIO_SERVER_PORT")
+    if server_name:
+        launch_kwargs["server_name"] = server_name
+    if server_port:
+        launch_kwargs["server_port"] = int(server_port)
+    demo.launch(**launch_kwargs)
 
 
 if __name__ == "__main__":
