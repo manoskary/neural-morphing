@@ -35,6 +35,9 @@ env/
 /outputs/
 .pytest_cache/
 
+# Local clone of the Hugging Face Space deployment repo
+/hf-space-neural-morphing/
+
 # any wave files
 *.wav
 *.mp3
@@ -43,3 +46,16 @@ env/
 *.aac
 *.aif
 *.aiff
+
+# Intentional demo audio shipped with the app
+!examples/
+!examples/**/*.wav
+!examples/**/*.mp3
+!examples/**/*.flac
+!examples/**/*.m4a
+!examples/**/*.aac
+!examples/**/*.aif
+!examples/**/*.aiff
+
+# Local preview logs
+logs/

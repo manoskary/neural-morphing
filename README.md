@@ -32,10 +32,10 @@ docker run --rm -p 8080:8080 neural-morphing-demo
 
 ## Deploy With Google Cloud Build And Cloud Run
 
-Create the Artifact Registry repository once:
+Create the Artifact Registry repository once if it does not already exist:
 
 ```bash
-gcloud artifacts repositories create neural-morphing \
+gcloud artifacts repositories create cloud-run-source-deploy \
   --repository-format=docker \
   --location=europe-west1
 ```
@@ -43,7 +43,9 @@ gcloud artifacts repositories create neural-morphing \
 Submit a one-off build from this branch:
 
 ```bash
-gcloud builds submit --config cloudbuild.yaml .
+gcloud builds submit --project neural-morphing --config cloudbuild.yaml .
 ```
+
+The checked-in Cloud Build config deploys the `neural-morphing` Cloud Run service with 4 CPU, 8 GiB memory, and a 900 second request timeout. Those resources are required for the DAC model; the default Cloud Run 512 MiB limit is not enough.
 
 For private-repository deployment, create a Cloud Build trigger for this `demo` branch and point it at `cloudbuild.yaml`. The repository can stay private; reviewers only need the Cloud Run URL.

@@ -17,3 +17,12 @@ outputs/
 *.aac
 *.aif
 *.aiff
+
+!examples/
+!examples/**/*.wav
+!examples/**/*.mp3
+!examples/**/*.flac
+!examples/**/*.m4a
+!examples/**/*.aac
+!examples/**/*.aif
+!examples/**/*.aiff

@@ -25,6 +25,8 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir -r requirements.txt
 
 COPY python_project_idea.py ./
+COPY assets ./assets
+COPY examples ./examples
 
 EXPOSE 8080
 
