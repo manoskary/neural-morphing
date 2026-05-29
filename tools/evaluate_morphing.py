@@ -40,8 +40,19 @@ from scipy.stats import wilcoxon
 ABLATIONS = [
     {"id": "greedy_full_layer", "matcher": "greedy", "swap": "full_layer"},
     {"id": "greedy_rvq_group", "matcher": "greedy", "swap": "rvq_group"},
+    {"id": "greedy_smooth_full_layer", "matcher": "greedy_smooth", "swap": "full_layer"},
+    {"id": "greedy_smooth_rvq_group", "matcher": "greedy_smooth", "swap": "rvq_group"},
     {"id": "beam_full_layer", "matcher": "beam", "swap": "full_layer"},
     {"id": "beam_rvq_group", "matcher": "beam", "swap": "rvq_group"},
+    {"id": "viterbi_full_layer", "matcher": "viterbi", "swap": "full_layer"},
+    {"id": "viterbi_rvq_group", "matcher": "viterbi", "swap": "rvq_group"},
+    {"id": "beam_identity", "matcher": "beam", "swap": "identity"},
+    {"id": "beam_coarse_gated", "matcher": "beam", "swap": "coarse_gated"},
+    {"id": "beam_coarse_forced", "matcher": "beam", "swap": "coarse_forced"},
+    {"id": "beam_middle_only", "matcher": "beam", "swap": "middle_only"},
+    {"id": "beam_fine_only", "matcher": "beam", "swap": "fine_only"},
+    {"id": "beam_middle_fine", "matcher": "beam", "swap": "middle_fine"},
+    {"id": "beam_full_layer_forced", "matcher": "beam", "swap": "full_layer_forced"},
 ]
 
 DEFAULT_CODECS = ["dac", "spectrostream"]
@@ -307,6 +318,146 @@ def metric_clipping_fraction(audio: np.ndarray, threshold: float = 0.999) -> flo
     return float(np.mean(np.abs(arr.reshape(-1)) >= float(threshold)))
 
 
+def metric_onset_preservation(
+    output_audio: np.ndarray,
+    source_audio: np.ndarray,
+    sample_rate: int,
+    tolerance_ms: float = 50.0,
+) -> tuple[float, float]:
+    out, src = _align_pair(output_audio, source_audio)
+    if out.size < 2048 or src.size < 2048:
+        return float("nan"), float("nan")
+    try:
+        out_frames = librosa.onset.onset_detect(y=out, sr=sample_rate, units="frames", backtrack=False)
+        src_frames = librosa.onset.onset_detect(y=src, sr=sample_rate, units="frames", backtrack=False)
+    except Exception:
+        return float("nan"), float("nan")
+    out_times = librosa.frames_to_time(out_frames, sr=sample_rate)
+    src_times = librosa.frames_to_time(src_frames, sr=sample_rate)
+    if src_times.size == 0:
+        return float("nan"), float("nan")
+    if out_times.size == 0:
+        return 0.0, float("nan")
+
+    tol = float(tolerance_ms) / 1000.0
+    used: set[int] = set()
+    deviations = []
+    true_pos = 0
+    for src_t in src_times:
+        distances = np.abs(out_times - src_t)
+        order = np.argsort(distances)
+        match_idx = None
+        for idx in order:
+            if int(idx) in used:
+                continue
+            if float(distances[idx]) <= tol:
+                match_idx = int(idx)
+            break
+        if match_idx is not None:
+            used.add(match_idx)
+            true_pos += 1
+            deviations.append(abs(float(out_times[match_idx] - src_t)) * 1000.0)
+    precision = true_pos / max(1, out_times.size)
+    recall = true_pos / max(1, src_times.size)
+    f1 = 0.0 if precision + recall <= 0.0 else 2.0 * precision * recall / (precision + recall)
+    dev = float(np.mean(deviations)) if deviations else float("nan")
+    return float(f1), dev
+
+
+def metric_transient_strength_correlation(output_audio: np.ndarray, source_audio: np.ndarray, sample_rate: int) -> float:
+    out, src = _align_pair(output_audio, source_audio)
+    if out.size < 2048 or src.size < 2048:
+        return float("nan")
+    try:
+        out_env = librosa.onset.onset_strength(y=out, sr=sample_rate)
+        src_env = librosa.onset.onset_strength(y=src, sr=sample_rate)
+    except Exception:
+        return float("nan")
+    n = min(out_env.size, src_env.size)
+    if n == 0:
+        return float("nan")
+    return _safe_corrcoef(np.asarray(out_env[:n]), np.asarray(src_env[:n]))
+
+
+def metric_bandwise_envelope_correlation(output_audio: np.ndarray, source_audio: np.ndarray, sample_rate: int) -> float:
+    out, src = _align_pair(output_audio, source_audio)
+    n_fft = 2048
+    hop = 512
+    mag_out, _ = _stft_mag_phase(out, sample_rate, n_fft=n_fft, hop_length=hop)
+    mag_src, _ = _stft_mag_phase(src, sample_rate, n_fft=n_fft, hop_length=hop)
+    frames = min(mag_out.shape[1], mag_src.shape[1])
+    if frames == 0:
+        return float("nan")
+    freqs = np.linspace(0.0, sample_rate / 2.0, mag_out.shape[0])
+    bands = [(0.0, 250.0), (250.0, 2000.0), (2000.0, sample_rate / 2.0 + 1.0)]
+    corrs = []
+    for lo, hi in bands:
+        mask = (freqs >= lo) & (freqs < hi)
+        if not np.any(mask):
+            continue
+        env_out = np.sqrt(np.mean(mag_out[mask, :frames] ** 2, axis=0) + 1e-12)
+        env_src = np.sqrt(np.mean(mag_src[mask, :frames] ** 2, axis=0) + 1e-12)
+        corr = _safe_corrcoef(env_out, env_src)
+        if not math.isnan(corr):
+            corrs.append(corr)
+    return float(np.mean(corrs)) if corrs else float("nan")
+
+
+def metric_boundary_click_energy(audio: np.ndarray, sample_rate: int, boundaries_samples: np.ndarray, window_ms: float = 4.0) -> float:
+    mono = _to_mono_audio(audio)
+    if mono.size < 4 or boundaries_samples.size == 0:
+        return float("nan")
+    w = max(2, int(round(sample_rate * window_ms / 1000.0)))
+    vals = []
+    diff = np.diff(mono, prepend=mono[0])
+    for b in boundaries_samples.astype(int):
+        lo = max(0, b - w)
+        hi = min(diff.size, b + w)
+        if hi <= lo:
+            continue
+        click = float(np.mean(diff[lo:hi] ** 2) + 1e-12)
+        local = float(np.mean(mono[lo:hi] ** 2) + 1e-12)
+        vals.append(10.0 * math.log10(click / local))
+    return float(np.mean(vals)) if vals else float("nan")
+
+
+def metric_output_to_source_distance(output_audio: np.ndarray, source_audio: np.ndarray, sample_rate: int) -> float:
+    return metric_log_spectral_distance(output_audio, source_audio, sample_rate)
+
+
+def _resample_like(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
+    if int(orig_sr) == int(target_sr):
+        return audio
+    if audio.ndim == 1:
+        return librosa.resample(audio, orig_sr=int(orig_sr), target_sr=int(target_sr))
+    chans = [librosa.resample(audio[:, ch], orig_sr=int(orig_sr), target_sr=int(target_sr)) for ch in range(audio.shape[1])]
+    min_len = min(len(ch) for ch in chans)
+    return np.stack([ch[:min_len] for ch in chans], axis=1)
+
+
+def metric_nearest_palette_distance(
+    output_audio: np.ndarray,
+    sample_rate: int,
+    palette_cache: list[tuple[Path, np.ndarray, int]],
+) -> tuple[float, str]:
+    if not palette_cache:
+        return float("nan"), ""
+    best = float("inf")
+    best_path = ""
+    for path, pal_audio, pal_sr in palette_cache:
+        try:
+            pal = _resample_like(pal_audio, pal_sr, sample_rate)
+            distance = metric_log_spectral_distance(output_audio, pal, sample_rate)
+        except Exception:
+            distance = float("nan")
+        if not math.isnan(distance) and distance < best:
+            best = float(distance)
+            best_path = str(path)
+    if best == float("inf"):
+        return float("nan"), ""
+    return best, best_path
+
+
 def metric_fad(reference_wavs: List[Path], generated_wavs: List[Path], model_name: str = "vggish") -> dict:
     try:
         from frechet_audio_distance import FrechetAudioDistance  # type: ignore
@@ -442,6 +593,12 @@ def _run_command_template(template: str, context: dict) -> None:
     subprocess.run(command, shell=True, check=True)
 
 
+def _shell_quote(value: str) -> str:
+    if os.name == "nt":
+        return subprocess.list2cmdline([str(value)])
+    return shlex.quote(str(value))
+
+
 def _parse_csv_rows(csv_path: Path) -> List[dict]:
     with csv_path.open("r", newline="") as f:
         reader = csv.DictReader(f)
@@ -566,6 +723,14 @@ def evaluate(args: argparse.Namespace) -> None:
 
     palette_manifest = out_root / "palette_train.txt"
     palette_manifest.write_text("\n".join(str(p) for p in palette))
+    palette_metric_limit = max(0, int(getattr(args, "palette_metric_limit", 64)))
+    palette_cache: list[tuple[Path, np.ndarray, int]] = []
+    for pal_path in palette[:palette_metric_limit]:
+        try:
+            pal_audio, pal_sr = _load_audio(pal_path)
+            palette_cache.append((pal_path, pal_audio, pal_sr))
+        except Exception:
+            continue
 
     rows: List[dict] = []
     refs_for_fad: Dict[str, List[Path]] = {}
@@ -586,6 +751,7 @@ def evaluate(args: argparse.Namespace) -> None:
                 tokens_npy = run_dir / "tokens.npy"
                 match_indices_npy = run_dir / "match_indices.npy"
                 latency_json = run_dir / "latency.json"
+                diagnostics_json = run_dir / "diagnostics.json"
                 config_json = run_dir / "config.json"
                 config_payload = {
                     "codec": codec_id,
@@ -610,14 +776,15 @@ def evaluate(args: argparse.Namespace) -> None:
                 if args.runner_cmd:
                     context = {
                         "codec": codec_id,
-                        "source": shlex.quote(str(clip.source)),
-                        "reference": shlex.quote(str(clip.reference)),
-                        "palette_manifest": shlex.quote(str(palette_manifest)),
-                        "output_wav": shlex.quote(str(output_wav)),
-                        "tokens_npy": shlex.quote(str(tokens_npy)),
-                        "match_indices_npy": shlex.quote(str(match_indices_npy)),
-                        "latency_json": shlex.quote(str(latency_json)),
-                        "config_json": shlex.quote(str(config_json)),
+                        "source": _shell_quote(str(clip.source)),
+                        "reference": _shell_quote(str(clip.reference)),
+                        "palette_manifest": _shell_quote(str(palette_manifest)),
+                        "output_wav": _shell_quote(str(output_wav)),
+                        "tokens_npy": _shell_quote(str(tokens_npy)),
+                        "match_indices_npy": _shell_quote(str(match_indices_npy)),
+                        "latency_json": _shell_quote(str(latency_json)),
+                        "diagnostics_json": _shell_quote(str(diagnostics_json)),
+                        "config_json": _shell_quote(str(config_json)),
                         "matcher": ablation["matcher"],
                         "swap": ablation["swap"],
                         "ablation_id": ab_id,
@@ -646,6 +813,7 @@ def evaluate(args: argparse.Namespace) -> None:
                             "tokens_npy": str(tokens_npy),
                             "match_indices_npy": str(match_indices_npy),
                             "latency_json": str(latency_json),
+                            "diagnostics_json": str(diagnostics_json),
                             "config_json": str(config_json),
                         }
                     )
@@ -704,6 +872,21 @@ def evaluate(args: argparse.Namespace) -> None:
                 envelope_corr = metric_envelope_correlation(out_audio, src_audio)
                 phase_jump = metric_boundary_phase_jump(out_audio, out_sr, boundaries)
                 clipping_fraction = metric_clipping_fraction(out_audio)
+                source_onset_f1, source_onset_deviation_ms = metric_onset_preservation(out_audio, src_audio, out_sr)
+                transient_strength_correlation = metric_transient_strength_correlation(out_audio, src_audio, out_sr)
+                bandwise_envelope_correlation = metric_bandwise_envelope_correlation(out_audio, src_audio, out_sr)
+                boundary_click_energy = metric_boundary_click_energy(out_audio, out_sr, boundaries)
+                output_to_source_distance = metric_output_to_source_distance(out_audio, src_audio, out_sr)
+                output_to_nearest_palette_distance, nearest_palette_path = metric_nearest_palette_distance(
+                    out_audio,
+                    out_sr,
+                    palette_cache,
+                )
+                palette_embedding_shift = (
+                    output_to_source_distance - output_to_nearest_palette_distance
+                    if not math.isnan(output_to_source_distance) and not math.isnan(output_to_nearest_palette_distance)
+                    else float("nan")
+                )
 
                 latency_payload = {}
                 if latency_json.exists():
@@ -711,6 +894,12 @@ def evaluate(args: argparse.Namespace) -> None:
                         latency_payload = json.loads(latency_json.read_text())
                     except Exception:
                         latency_payload = {}
+                diagnostics_payload = {}
+                if diagnostics_json.exists():
+                    try:
+                        diagnostics_payload = json.loads(diagnostics_json.read_text())
+                    except Exception:
+                        diagnostics_payload = {}
 
                 encode_ok = bool(latency_payload.get("encode_ok", True))
                 decode_ok = bool(latency_payload.get("decode_ok", True))
@@ -728,6 +917,19 @@ def evaluate(args: argparse.Namespace) -> None:
                 end_to_end_rtf = _to_float(latency_payload.get("end_to_end_rtf", float("nan")))
                 failure_count = int(_to_float(latency_payload.get("failure_count", 0), default=0.0))
                 retry_count = int(_to_float(latency_payload.get("retry_count", 0), default=0.0))
+                sequence_runtime_ms = _to_float(latency_payload.get("sequence_runtime_ms", float("nan")))
+                objective_j = _to_float(latency_payload.get("objective_j", float("nan")))
+                emission_cost = _to_float(latency_payload.get("emission_cost", float("nan")))
+                transition_cost = _to_float(latency_payload.get("transition_cost", float("nan")))
+                weighted_transition_cost = _to_float(latency_payload.get("weighted_transition_cost", float("nan")))
+                file_switch_rate = _to_float(latency_payload.get("file_switch_rate", float("nan")))
+                adjacent_step_rate = _to_float(latency_payload.get("adjacent_step_rate", float("nan")))
+                coarse_transfer_fraction = _to_float(latency_payload.get("coarse_transfer_fraction", float("nan")))
+                coarse_fallback_fraction = _to_float(latency_payload.get("coarse_fallback_fraction", float("nan")))
+                token_change_rate_coarse = _to_float(latency_payload.get("token_change_rate_coarse", float("nan")))
+                token_change_rate_middle = _to_float(latency_payload.get("token_change_rate_middle", float("nan")))
+                token_change_rate_fine = _to_float(latency_payload.get("token_change_rate_fine", float("nan")))
+                token_change_rate_overall = _to_float(latency_payload.get("token_change_rate_overall", float("nan")))
 
                 determinism_hashes = []
                 base_hash = latency_payload.get("determinism_hash", "")
@@ -747,18 +949,20 @@ def evaluate(args: argparse.Namespace) -> None:
                         det_tokens_npy = det_dir / "tokens.npy"
                         det_match_indices_npy = det_dir / "match_indices.npy"
                         det_latency_json = det_dir / "latency.json"
+                        det_diagnostics_json = det_dir / "diagnostics.json"
                         det_config_json = det_dir / "config.json"
                         _write_json(det_config_json, config_payload)
                         det_context = {
                             "codec": codec_id,
-                            "source": shlex.quote(str(clip.source)),
-                            "reference": shlex.quote(str(clip.reference)),
-                            "palette_manifest": shlex.quote(str(palette_manifest)),
-                            "output_wav": shlex.quote(str(det_output_wav)),
-                            "tokens_npy": shlex.quote(str(det_tokens_npy)),
-                            "match_indices_npy": shlex.quote(str(det_match_indices_npy)),
-                            "latency_json": shlex.quote(str(det_latency_json)),
-                            "config_json": shlex.quote(str(det_config_json)),
+                            "source": _shell_quote(str(clip.source)),
+                            "reference": _shell_quote(str(clip.reference)),
+                            "palette_manifest": _shell_quote(str(palette_manifest)),
+                            "output_wav": _shell_quote(str(det_output_wav)),
+                            "tokens_npy": _shell_quote(str(det_tokens_npy)),
+                            "match_indices_npy": _shell_quote(str(det_match_indices_npy)),
+                            "latency_json": _shell_quote(str(det_latency_json)),
+                            "diagnostics_json": _shell_quote(str(det_diagnostics_json)),
+                            "config_json": _shell_quote(str(det_config_json)),
                             "matcher": ablation["matcher"],
                             "swap": ablation["swap"],
                             "ablation_id": ab_id,
@@ -805,6 +1009,15 @@ def evaluate(args: argparse.Namespace) -> None:
                     "log_spectral_distance": log_spectral_dist,
                     "envelope_correlation": envelope_corr,
                     "boundary_phase_jump": phase_jump,
+                    "source_onset_f1": source_onset_f1,
+                    "source_onset_deviation_ms": source_onset_deviation_ms,
+                    "transient_strength_correlation": transient_strength_correlation,
+                    "bandwise_envelope_correlation": bandwise_envelope_correlation,
+                    "boundary_click_energy": boundary_click_energy,
+                    "output_to_source_distance": output_to_source_distance,
+                    "output_to_nearest_palette_distance": output_to_nearest_palette_distance,
+                    "palette_embedding_shift": palette_embedding_shift,
+                    "nearest_palette_path": nearest_palette_path,
                     "clipping_fraction": clipping_fraction,
                     "encode_ok": float(encode_ok),
                     "decode_ok": float(decode_ok),
@@ -822,11 +1035,27 @@ def evaluate(args: argparse.Namespace) -> None:
                     "total_ms": total_ms,
                     "audio_seconds": audio_seconds,
                     "end_to_end_rtf": end_to_end_rtf,
+                    "objective_j": objective_j,
+                    "emission_cost": emission_cost,
+                    "transition_cost": transition_cost,
+                    "weighted_transition_cost": weighted_transition_cost,
+                    "sequence_runtime_ms": sequence_runtime_ms,
+                    "file_switch_rate": file_switch_rate,
+                    "adjacent_step_rate": adjacent_step_rate,
+                    "coarse_transfer_fraction": coarse_transfer_fraction,
+                    "coarse_fallback_fraction": coarse_fallback_fraction,
+                    "token_change_rate_coarse": token_change_rate_coarse,
+                    "token_change_rate_middle": token_change_rate_middle,
+                    "token_change_rate_fine": token_change_rate_fine,
+                    "token_change_rate_overall": token_change_rate_overall,
+                    "selected_emission_mean": _to_float(diagnostics_payload.get("selected_emission_mean", float("nan"))),
+                    "selected_emission_median": _to_float(diagnostics_payload.get("selected_emission_median", float("nan"))),
                     "tokens_shape": json.dumps(token_shape),
                     "output_wav": str(output_wav),
                     "tokens_npy": str(tokens_npy) if tokens_npy.exists() else "",
                     "match_indices_npy": str(match_indices_npy) if match_indices_npy.exists() else "",
                     "latency_json": str(latency_json) if latency_json.exists() else "",
+                    "diagnostics_json": str(diagnostics_json) if diagnostics_json.exists() else "",
                     "config_json": str(config_json),
                 }
                 rows.append(row)
@@ -856,6 +1085,20 @@ def evaluate(args: argparse.Namespace) -> None:
         "chroma_difference",
         "envelope_correlation",
         "boundary_phase_jump",
+        "source_onset_f1",
+        "source_onset_deviation_ms",
+        "transient_strength_correlation",
+        "bandwise_envelope_correlation",
+        "boundary_click_energy",
+        "output_to_source_distance",
+        "output_to_nearest_palette_distance",
+        "palette_embedding_shift",
+        "file_switch_rate",
+        "adjacent_step_rate",
+        "token_change_rate_coarse",
+        "token_change_rate_middle",
+        "token_change_rate_fine",
+        "token_change_rate_overall",
     ]
     all_metrics = quality_metric_names + structure_metric_names
     summary = {
@@ -889,6 +1132,7 @@ def evaluate(args: argparse.Namespace) -> None:
                     lo, hi = _bootstrap_ci(vals, alpha=0.05, n_boot=args.bootstrap, seed=args.seed)
                     quality_summary[m] = {
                         "mean": float(np.mean(vals)),
+                        "median": float(np.median(vals)),
                         "std": float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0,
                         "ci95": [lo, hi],
                         "n": len(vals),
@@ -904,6 +1148,7 @@ def evaluate(args: argparse.Namespace) -> None:
                     lo, hi = _bootstrap_ci(vals, alpha=0.05, n_boot=args.bootstrap, seed=args.seed)
                     structure_summary[m] = {
                         "mean": float(np.mean(vals)),
+                        "median": float(np.median(vals)),
                         "std": float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0,
                         "ci95": [lo, hi],
                         "n": len(vals),
@@ -1004,6 +1249,20 @@ def evaluate(args: argparse.Namespace) -> None:
         "chroma_difference": True,
         "envelope_correlation": False,
         "boundary_phase_jump": True,
+        "source_onset_f1": False,
+        "source_onset_deviation_ms": True,
+        "transient_strength_correlation": False,
+        "bandwise_envelope_correlation": False,
+        "boundary_click_energy": True,
+        "output_to_source_distance": True,
+        "output_to_nearest_palette_distance": True,
+        "palette_embedding_shift": False,
+        "file_switch_rate": True,
+        "adjacent_step_rate": False,
+        "token_change_rate_coarse": False,
+        "token_change_rate_middle": False,
+        "token_change_rate_fine": False,
+        "token_change_rate_overall": False,
     }
     metric_values_by_name: Dict[str, List[float]] = {m: [] for m in lower_better}
     for cond in conditions_for_ranking:
@@ -1094,6 +1353,15 @@ def evaluate(args: argparse.Namespace) -> None:
         "log_spectral_distance",
         "envelope_correlation",
         "boundary_phase_jump",
+        "source_onset_f1",
+        "source_onset_deviation_ms",
+        "transient_strength_correlation",
+        "bandwise_envelope_correlation",
+        "boundary_click_energy",
+        "output_to_source_distance",
+        "output_to_nearest_palette_distance",
+        "palette_embedding_shift",
+        "nearest_palette_path",
         "clipping_fraction",
         "encode_ok",
         "decode_ok",
@@ -1111,11 +1379,27 @@ def evaluate(args: argparse.Namespace) -> None:
         "total_ms",
         "audio_seconds",
         "end_to_end_rtf",
+        "objective_j",
+        "emission_cost",
+        "transition_cost",
+        "weighted_transition_cost",
+        "sequence_runtime_ms",
+        "file_switch_rate",
+        "adjacent_step_rate",
+        "coarse_transfer_fraction",
+        "coarse_fallback_fraction",
+        "token_change_rate_coarse",
+        "token_change_rate_middle",
+        "token_change_rate_fine",
+        "token_change_rate_overall",
+        "selected_emission_mean",
+        "selected_emission_median",
         "tokens_shape",
         "output_wav",
         "tokens_npy",
         "match_indices_npy",
         "latency_json",
+        "diagnostics_json",
         "config_json",
     ]
     with csv_path.open("w", newline="") as f:
@@ -1138,6 +1422,7 @@ def evaluate(args: argparse.Namespace) -> None:
             "seed": args.seed,
             "bootstrap": args.bootstrap,
             "determinism_runs": args.determinism_runs,
+            "palette_metric_limit": args.palette_metric_limit,
             "params_cli_overrides": {
                 "temperature": args.temperature,
                 "threshold": args.threshold,
@@ -1171,6 +1456,7 @@ def _make_evaluate_namespace(base_args: argparse.Namespace, output_dir: Path, pa
         clipping_gate_fraction=base_args.clipping_gate_fraction,
         top_n_presets=base_args.top_n_presets,
         clip_limit=base_args.clip_limit,
+        palette_metric_limit=base_args.palette_metric_limit,
         temperature=params["temperature"],
         threshold=params["threshold"],
         continuity=params["continuity"],
@@ -1407,7 +1693,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Optional shell command template to generate outputs for each clip+ablation. "
             "Placeholders: {source} {reference} {palette_manifest} {output_wav} {tokens_npy} "
-            "{match_indices_npy} {latency_json} {config_json} {matcher} {swap} {ablation_id}"
+            "{match_indices_npy} {latency_json} {diagnostics_json} {config_json} {matcher} {swap} {ablation_id}"
         ),
     )
     ev.add_argument("--dry-run", action="store_true", help="Print expanded runner commands without executing.")
@@ -1422,6 +1708,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ev.add_argument("--clipping-gate-fraction", type=float, default=1e-4, help="Maximum clipping fraction for health gate.")
     ev.add_argument("--top-n-presets", type=int, default=8, help="Top-N ranked presets exported from evaluation.")
     ev.add_argument("--clip-limit", type=int, default=0, help="Optional cap on number of source_eval clips (0=all).")
+    ev.add_argument("--palette-metric-limit", type=int, default=64, help="Palette clips to cache for nearest-palette transfer metrics.")
     ev.add_argument("--temperature", type=float, default=None, help="Global override (default: tuned per codec)")
     ev.add_argument("--threshold", type=float, default=None, help="Global override (default: tuned per codec)")
     ev.add_argument("--continuity", type=float, default=None, help="Global override (default: tuned per codec)")
@@ -1447,6 +1734,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     search_p.add_argument("--clipping-gate-fraction", type=float, default=1e-4)
     search_p.add_argument("--top-n-presets", type=int, default=8)
     search_p.add_argument("--clip-limit", type=int, default=0)
+    search_p.add_argument("--palette-metric-limit", type=int, default=64)
     search_p.add_argument("--dry-run", action="store_true")
     search_p.set_defaults(func=search)
 

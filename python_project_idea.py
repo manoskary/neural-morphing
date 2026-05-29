@@ -30,6 +30,23 @@ def _env_flag(name: str, default: str = "0") -> bool:
 
 
 class LatentGranularSynthesis:
+    MATCH_MODES = {"greedy", "greedy_smooth", "beam", "viterbi"}
+    SWAP_ALIASES = {
+        "full_layer": "full_layer_gated",
+        "rvq_group": "rvq_group_current",
+    }
+    SWAP_MODES = {
+        "identity",
+        "coarse_gated",
+        "coarse_forced",
+        "middle_only",
+        "fine_only",
+        "middle_fine",
+        "rvq_group_current",
+        "full_layer_gated",
+        "full_layer_forced",
+    }
+
     DAC_DEFAULTS = {
         "temperature": 0.47,
         "threshold": 0.55,
@@ -116,9 +133,10 @@ class LatentGranularSynthesis:
         self.candidate_count = 96
         self.beam_width = 12
         self.match_mode = "beam"
-        self.swap_mode = "full_layer"
+        self.swap_mode = "full_layer_gated"
         self._apply_codec_defaults("dac")
         self.last_timings = {"encode_ms": 0.0, "decode_ms": 0.0, "total_ms": 0.0}
+        self.last_sequence_diagnostics = {}
 
         self.files = None
         self.last_aug = False
@@ -694,10 +712,11 @@ class LatentGranularSynthesis:
     def set_ablation(self, match_mode: str, swap_mode: str):
         match_mode = (match_mode or "beam").strip().lower()
         swap_mode = (swap_mode or "full_layer").strip().lower()
+        swap_mode = self.SWAP_ALIASES.get(swap_mode, swap_mode)
 
-        if match_mode not in ("beam", "greedy"):
+        if match_mode not in self.MATCH_MODES:
             raise ValueError(f"Unsupported match_mode: {match_mode}")
-        if swap_mode not in ("rvq_group", "full_layer"):
+        if swap_mode not in self.SWAP_MODES:
             raise ValueError(f"Unsupported swap_mode: {swap_mode}")
 
         self.match_mode = match_mode
@@ -780,27 +799,72 @@ class LatentGranularSynthesis:
         latent = 1.0 - float(torch.dot(self.palette_desc_full[prev_idx], self.palette_desc_full[idx]))
         return latent + self._meta_penalty(prev_idx, idx)
 
-    def _select_path(self, grains):
-        if not grains:
-            return []
+    def _sequence_diagnostics(self, grains, path, select_ms):
+        if not grains or not path:
+            return {
+                "objective_j": float("nan"),
+                "emission_cost": float("nan"),
+                "transition_cost": float("nan"),
+                "weighted_transition_cost": float("nan"),
+                "index_jitter": float("nan"),
+                "file_switch_rate": float("nan"),
+                "adjacent_step_rate": float("nan"),
+                "runtime_ms": float(select_ms),
+            }
 
-        if self.match_mode == "greedy":
-            path = []
-            prev_best = self.prev_best_index
-            for grain in grains:
-                best_idx = 0
-                best_score = float("inf")
-                for cand_idx, candidate in enumerate(grain["candidates"]):
-                    score = candidate["emission"]
-                    if self.continuity > 0.0 and prev_best is not None:
-                        score += self.continuity * self._transition_cost(prev_best, candidate["ann_index"])
-                    if score < best_score:
-                        best_score = score
-                        best_idx = cand_idx
-                path.append(best_idx)
-                prev_best = grain["candidates"][best_idx]["ann_index"]
-            return path
+        selected = []
+        for grain_idx, cand_idx in enumerate(path):
+            candidates = grains[grain_idx]["candidates"]
+            selected.append(candidates[int(cand_idx)])
 
+        ann = [int(c["ann_index"]) for c in selected]
+        emissions = [float(c["emission"]) for c in selected]
+        transition_values = []
+        file_switches = []
+        adjacent_steps = []
+        for prev_ann, next_ann in zip(ann[:-1], ann[1:]):
+            transition_values.append(float(self._transition_cost(prev_ann, next_ann)))
+            if self.palette_file_ids is not None and self.palette_frame_indices is not None:
+                same_file = bool(self.palette_file_ids[prev_ann] == self.palette_file_ids[next_ann])
+                file_switches.append(float(not same_file))
+                frame_delta = abs(int(self.palette_frame_indices[next_ann]) - int(self.palette_frame_indices[prev_ann]))
+                adjacent_steps.append(float(same_file and frame_delta <= self.stride))
+
+        emission_cost = float(np.sum(emissions))
+        transition_cost = float(np.sum(transition_values)) if transition_values else 0.0
+        weighted_transition_cost = float(self.continuity * transition_cost)
+        jitter = float(np.mean(np.abs(np.diff(np.asarray(ann, dtype=np.float64))))) if len(ann) > 1 else 0.0
+        return {
+            "objective_j": emission_cost + weighted_transition_cost,
+            "emission_cost": emission_cost,
+            "transition_cost": transition_cost,
+            "weighted_transition_cost": weighted_transition_cost,
+            "index_jitter": jitter,
+            "file_switch_rate": float(np.mean(file_switches)) if file_switches else float("nan"),
+            "adjacent_step_rate": float(np.mean(adjacent_steps)) if adjacent_steps else float("nan"),
+            "runtime_ms": float(select_ms),
+            "steps": int(len(path)),
+            "candidate_count_max": int(max(len(g["candidates"]) for g in grains)),
+        }
+
+    def _select_path_greedy(self, grains, use_transition: bool):
+        path = []
+        prev_best = self.prev_best_index
+        for grain in grains:
+            best_idx = 0
+            best_score = float("inf")
+            for cand_idx, candidate in enumerate(grain["candidates"]):
+                score = candidate["emission"]
+                if use_transition and self.continuity > 0.0 and prev_best is not None:
+                    score += self.continuity * self._transition_cost(prev_best, candidate["ann_index"])
+                if score < best_score:
+                    best_score = score
+                    best_idx = cand_idx
+            path.append(best_idx)
+            prev_best = grain["candidates"][best_idx]["ann_index"]
+        return path
+
+    def _select_path_beam(self, grains):
         beam_width = max(1, min(self.beam_width, max(len(grain["candidates"]) for grain in grains)))
         history = []
 
@@ -837,7 +901,65 @@ class LatentGranularSynthesis:
             state = history[grain_idx][best_idx]
             path[grain_idx] = state["candidate_idx"]
             best_idx = state["back"]
+        return path
 
+    def _select_path_viterbi(self, grains):
+        first = grains[0]
+        prev_scores = np.asarray([float(c["emission"]) for c in first["candidates"]], dtype=np.float64)
+        if self.prev_best_index is not None and self.continuity > 0.0:
+            for idx, candidate in enumerate(first["candidates"]):
+                prev_scores[idx] += self.continuity * self._transition_cost(self.prev_best_index, candidate["ann_index"])
+
+        backs = []
+        transition_cache = {}
+        for grain_idx in range(1, len(grains)):
+            prev_candidates = grains[grain_idx - 1]["candidates"]
+            candidates = grains[grain_idx]["candidates"]
+            next_scores = np.empty(len(candidates), dtype=np.float64)
+            back = np.zeros(len(candidates), dtype=np.int32)
+            for cand_idx, candidate in enumerate(candidates):
+                ann = int(candidate["ann_index"])
+                best_score = float("inf")
+                best_prev = 0
+                for prev_idx, prev_candidate in enumerate(prev_candidates):
+                    prev_ann = int(prev_candidate["ann_index"])
+                    key = (prev_ann, ann)
+                    if key not in transition_cache:
+                        transition_cache[key] = float(self._transition_cost(prev_ann, ann))
+                    score = prev_scores[prev_idx] + float(candidate["emission"])
+                    if self.continuity > 0.0:
+                        score += self.continuity * transition_cache[key]
+                    if score < best_score:
+                        best_score = score
+                        best_prev = prev_idx
+                next_scores[cand_idx] = best_score
+                back[cand_idx] = best_prev
+            backs.append(back)
+            prev_scores = next_scores
+
+        best_idx = int(np.argmin(prev_scores))
+        path = [0] * len(grains)
+        path[-1] = best_idx
+        for grain_idx in range(len(grains) - 1, 0, -1):
+            best_idx = int(backs[grain_idx - 1][best_idx])
+            path[grain_idx - 1] = best_idx
+        return path
+
+    def _select_path(self, grains):
+        if not grains:
+            return []
+
+        started = time.perf_counter()
+        if self.match_mode == "greedy":
+            path = self._select_path_greedy(grains, use_transition=False)
+        elif self.match_mode == "greedy_smooth":
+            path = self._select_path_greedy(grains, use_transition=True)
+        elif self.match_mode == "viterbi":
+            path = self._select_path_viterbi(grains)
+        else:
+            path = self._select_path_beam(grains)
+        select_ms = (time.perf_counter() - started) * 1000.0
+        self.last_sequence_diagnostics = self._sequence_diagnostics(grains, path, select_ms)
         return path
 
     def morph_audio(self, target_file, return_debug=False):
@@ -937,6 +1059,31 @@ class LatentGranularSynthesis:
         mid_group = self.rvq_groups[1] if self.rvq_groups else []
 
         matched_indices = []
+        selected_grain_records = []
+        coarse_transfer_flags = []
+
+        def _copy_group_from_candidate(group, candidate_index, start, span):
+            for q in group:
+                output_codes[q, start : start + span] = self.palette_codes[candidate_index, q, :span]
+
+        def _vote_group_from_topk(group, grain, start, span):
+            top_k = min(self.top_k, len(grain["candidates"]))
+            top_candidates = grain["candidates"][:top_k]
+            fine_dists = torch.tensor([c["fine"] for c in top_candidates], dtype=torch.float32)
+            temperature = max(float(self.temperature), 1.0e-4)
+            logits = -fine_dists / temperature
+            weights_k = torch.softmax(logits, dim=0).cpu().numpy()
+
+            for q in group:
+                for u in range(span):
+                    scores = {}
+                    for k, cand in enumerate(top_candidates):
+                        code = int(self.palette_codes[cand["ann_index"], q, u].item())
+                        scores[code] = scores.get(code, 0.0) + float(weights_k[k])
+                    if scores:
+                        best_code = max(scores.items(), key=lambda kv: kv[1])[0]
+                        output_codes[q, start + u] = best_code
+
         for grain_idx, grain in enumerate(grains):
             candidate_idx = path[grain_idx]
             candidate = grain["candidates"][candidate_idx]
@@ -945,39 +1092,97 @@ class LatentGranularSynthesis:
             start = grain["start"]
             span = min(self.unit, output_codes.shape[-1] - start)
 
-            fallback_coarse = candidate["emission"] > self.threshold
-            if self.swap_mode == "full_layer":
-                if fallback_coarse:
-                    continue
+            coarse_transfer = candidate["emission"] <= self.threshold
+            coarse_transfer_flags.append(float(coarse_transfer))
+            selected_grain_records.append(
+                {
+                    "grain_index": int(grain_idx),
+                    "start": int(start),
+                    "candidate_rank": int(candidate_idx),
+                    "ann_index": int(path_index),
+                    "emission": float(candidate["emission"]),
+                    "fine": float(candidate["fine"]),
+                    "group_dists": [float(x) for x in candidate.get("group_dists", [])],
+                    "coarse_transfer": bool(coarse_transfer),
+                }
+            )
+
+            if self.swap_mode == "identity":
+                continue
+            if self.swap_mode == "full_layer_gated":
+                if coarse_transfer:
+                    output_codes[:, start : start + span] = self.palette_codes[path_index, :, :span]
+                continue
+            if self.swap_mode == "full_layer_forced":
                 output_codes[:, start : start + span] = self.palette_codes[path_index, :, :span]
-            else:
-                top_k = min(self.top_k, len(grain["candidates"]))
-                top_candidates = grain["candidates"][:top_k]
-                fine_dists = torch.tensor([c["fine"] for c in top_candidates], dtype=torch.float32)
+                continue
+            if self.swap_mode == "coarse_gated":
+                if coarse_transfer:
+                    _copy_group_from_candidate(coarse_group, path_index, start, span)
+                continue
+            if self.swap_mode == "coarse_forced":
+                _copy_group_from_candidate(coarse_group, path_index, start, span)
+                continue
+            if self.swap_mode == "middle_only":
+                _copy_group_from_candidate(mid_group, path_index, start, span)
+                continue
+            if self.swap_mode == "fine_only":
+                _vote_group_from_topk(fine_group, grain, start, span)
+                continue
+            if self.swap_mode == "middle_fine":
+                _copy_group_from_candidate(mid_group, path_index, start, span)
+                _vote_group_from_topk(fine_group, grain, start, span)
+                continue
 
-                temperature = max(float(self.temperature), 1.0e-4)
-                logits = -fine_dists / temperature
-                weights_k = torch.softmax(logits, dim=0).cpu().numpy()
-
-                for q in coarse_group:
-                    if fallback_coarse:
-                        continue
-                    output_codes[q, start : start + span] = self.palette_codes[path_index, q, :span]
-
-                for q in mid_group:
-                    output_codes[q, start : start + span] = self.palette_codes[path_index, q, :span]
-
-                for q in fine_group:
-                    for u in range(span):
-                        scores = {}
-                        for k, cand in enumerate(top_candidates):
-                            code = int(self.palette_codes[cand["ann_index"], q, u].item())
-                            scores[code] = scores.get(code, 0.0) + float(weights_k[k])
-                        if scores:
-                            best_code = max(scores.items(), key=lambda kv: kv[1])[0]
-                            output_codes[q, start + u] = best_code
+            # Current RVQ-group policy: gate coarse transfer, always transfer middle,
+            # and use Top-K voting for fine codebooks.
+            if coarse_transfer:
+                _copy_group_from_candidate(coarse_group, path_index, start, span)
+            _copy_group_from_candidate(mid_group, path_index, start, span)
+            _vote_group_from_topk(fine_group, grain, start, span)
 
         output_codes = output_codes.unsqueeze(0).to(torch.int64)
+        target_codes_for_diag = target_codes.to(torch.int64)
+        output_codes_for_diag = output_codes.squeeze(0)
+
+        def _token_change_rate(group):
+            if not group:
+                return float("nan")
+            src = target_codes_for_diag[group, :]
+            out = output_codes_for_diag[group, :]
+            if src.numel() == 0:
+                return float("nan")
+            return float(torch.mean((src != out).to(torch.float32)).item())
+
+        token_change_rates = {
+            "coarse": _token_change_rate(coarse_group),
+            "middle": _token_change_rate(mid_group),
+            "fine": _token_change_rate(fine_group),
+            "overall": float(torch.mean((target_codes_for_diag != output_codes_for_diag).to(torch.float32)).item()),
+        }
+        selected_emissions = [r["emission"] for r in selected_grain_records]
+        selected_group_dists = np.asarray([r["group_dists"] for r in selected_grain_records if r["group_dists"]], dtype=np.float64)
+        band_distance_means = {}
+        if selected_group_dists.size > 0:
+            names = ["coarse", "middle", "fine"]
+            for idx, name in enumerate(names[: selected_group_dists.shape[1]]):
+                band_distance_means[name] = float(np.mean(selected_group_dists[:, idx]))
+        diagnostics = {
+            "codec": self.codec_id,
+            "match_mode": self.match_mode,
+            "swap_mode": self.swap_mode,
+            "threshold": float(self.threshold),
+            "rho": float(self.rvq_focus),
+            "rvq_groups": [list(map(int, g)) for g in (self.rvq_groups or [])],
+            "sequence": dict(self.last_sequence_diagnostics),
+            "token_change_rates": token_change_rates,
+            "coarse_transfer_fraction": float(np.mean(coarse_transfer_flags)) if coarse_transfer_flags else float("nan"),
+            "coarse_fallback_fraction": float(1.0 - np.mean(coarse_transfer_flags)) if coarse_transfer_flags else float("nan"),
+            "selected_emission_mean": float(np.mean(selected_emissions)) if selected_emissions else float("nan"),
+            "selected_emission_median": float(np.median(selected_emissions)) if selected_emissions else float("nan"),
+            "selected_band_distance_mean": band_distance_means,
+            "selected_grains": selected_grain_records,
+        }
         decode_started = time.perf_counter()
         decoded = self.decode(audio_codes=output_codes)
         self.last_timings["decode_ms"] = (time.perf_counter() - decode_started) * 1000.0
@@ -1018,6 +1223,7 @@ class LatentGranularSynthesis:
                 "tokens": output_codes.squeeze(0).detach().cpu().numpy().astype(np.int32),
                 "match_indices": np.asarray(matched_indices, dtype=np.int32),
                 "timings": dict(self.last_timings),
+                "diagnostics": diagnostics,
             }
 
         return self.sample_rate, scaled

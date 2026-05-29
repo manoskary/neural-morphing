@@ -19,7 +19,7 @@ from typing import Dict, Iterable, List
 
 import numpy as np
 import soundfile as sf
-from scipy.stats import wilcoxon
+from scipy.stats import rankdata, wilcoxon
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -31,9 +31,9 @@ DEFAULT_SEEDS = [1234, 2234, 3234]
 DEFAULT_CHUNK_SIZES = [8192, 16384, 32768]
 
 DEFAULT_RUNNER_CMD = (
-    "./.venv/bin/python tools/run_morph_ablation.py --codec {codec} --palette-manifest {palette_manifest} "
+    "{python_bin} tools/run_morph_ablation.py --codec {codec} --palette-manifest {palette_manifest} "
     "--source {source} --output-wav {output_wav} --tokens-npy {tokens_npy} --match-indices-npy {match_indices_npy} "
-    "--latency-json {latency_json} --matcher {matcher} --swap {swap} --temperature {temperature} --threshold {threshold} "
+    "--latency-json {latency_json} --diagnostics-json {diagnostics_json} --matcher {matcher} --swap {swap} --temperature {temperature} --threshold {threshold} "
     "--continuity {continuity} --rvq-focus {rvq_focus} --unit {unit} --stride {stride} --top-k {top_k} --seed {seed}"
 )
 
@@ -66,6 +66,20 @@ STRUCTURE_METRICS = [
     "chroma_difference",
     "envelope_correlation",
     "boundary_phase_jump",
+    "source_onset_f1",
+    "source_onset_deviation_ms",
+    "transient_strength_correlation",
+    "bandwise_envelope_correlation",
+    "boundary_click_energy",
+    "output_to_source_distance",
+    "output_to_nearest_palette_distance",
+    "palette_embedding_shift",
+    "file_switch_rate",
+    "adjacent_step_rate",
+    "token_change_rate_coarse",
+    "token_change_rate_middle",
+    "token_change_rate_fine",
+    "token_change_rate_overall",
 ]
 
 HEALTH_METRICS_HIGHER_BETTER = [
@@ -93,6 +107,20 @@ LOWER_BETTER = {
     "chroma_difference": True,
     "envelope_correlation": False,
     "boundary_phase_jump": True,
+    "source_onset_f1": False,
+    "source_onset_deviation_ms": True,
+    "transient_strength_correlation": False,
+    "bandwise_envelope_correlation": False,
+    "boundary_click_energy": True,
+    "output_to_source_distance": True,
+    "output_to_nearest_palette_distance": True,
+    "palette_embedding_shift": False,
+    "file_switch_rate": True,
+    "adjacent_step_rate": False,
+    "token_change_rate_coarse": False,
+    "token_change_rate_middle": False,
+    "token_change_rate_fine": False,
+    "token_change_rate_overall": False,
 }
 
 
@@ -153,6 +181,7 @@ def _summarize_values(values: List[float], bootstrap: int, seed: int) -> dict:
     lo, hi = _bootstrap_ci(arr, alpha=0.05, n_boot=bootstrap, seed=seed)
     return {
         "mean": float(np.mean(arr)),
+        "median": float(np.median(arr)),
         "std": float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0,
         "ci95": [lo, hi],
         "n": len(arr),
@@ -197,6 +226,12 @@ def _run_command(cmd: List[str], log_path: Path | None = None) -> None:
 
     if completed.returncode != 0:
         raise RuntimeError(f"Command failed ({completed.returncode}): {rendered}\n{payload}")
+
+
+def _shell_quote(value: str) -> str:
+    if sys.platform.startswith("win"):
+        return subprocess.list2cmdline([str(value)])
+    return shlex.quote(str(value))
 
 
 def _audio_files(root: Path) -> List[Path]:
@@ -441,15 +476,41 @@ def _paired_significance(rows: List[dict], codec_id: str, metric_key: str, basel
             continue
         common = sorted(set(baseline.keys()) & set(mapping.keys()))
         if len(common) < 3:
-            out[ablation_id] = {"n": len(common), "p_value": float("nan"), "p_adj_bh": float("nan"), "significant_0p05": False}
+            out[ablation_id] = {
+                "n": len(common),
+                "paired_median_difference": float("nan"),
+                "effect_size_rank_biserial": float("nan"),
+                "p_value": float("nan"),
+                "p_adj_bh": float("nan"),
+                "significant_0p05": False,
+            }
             continue
         a = np.asarray([baseline[k] for k in common], dtype=np.float64)
         b = np.asarray([mapping[k] for k in common], dtype=np.float64)
+        diff = b - a
         try:
             p_val = float(wilcoxon(a, b, zero_method="wilcox", correction=False, alternative="two-sided").pvalue)
         except Exception:
             p_val = float("nan")
-        out[ablation_id] = {"n": len(common), "p_value": p_val, "p_adj_bh": float("nan"), "significant_0p05": False}
+        nonzero = diff[np.abs(diff) > 1e-12]
+        if nonzero.size:
+            ranks = rankdata(np.abs(nonzero))
+            total_rank = float(np.sum(ranks))
+            rank_biserial = (
+                float((np.sum(ranks[nonzero > 0.0]) - np.sum(ranks[nonzero < 0.0])) / total_rank)
+                if total_rank > 0.0
+                else float("nan")
+            )
+        else:
+            rank_biserial = 0.0
+        out[ablation_id] = {
+            "n": len(common),
+            "paired_median_difference": float(np.median(diff)),
+            "effect_size_rank_biserial": rank_biserial,
+            "p_value": p_val,
+            "p_adj_bh": float("nan"),
+            "significant_0p05": False,
+        }
         pvals.append(p_val)
         keys.append(ablation_id)
 
@@ -717,6 +778,7 @@ def aggregate_reports(run_dirs: List[Path], output_dir: Path, options: Aggregate
                         "panel": "quality",
                         "metric": metric,
                         "mean": stats["mean"],
+                        "median": stats.get("median", float("nan")),
                         "std": stats["std"],
                         "ci95_lo": stats["ci95"][0],
                         "ci95_hi": stats["ci95"][1],
@@ -734,6 +796,7 @@ def aggregate_reports(run_dirs: List[Path], output_dir: Path, options: Aggregate
                         "panel": "structure",
                         "metric": metric,
                         "mean": stats["mean"],
+                        "median": stats.get("median", float("nan")),
                         "std": stats["std"],
                         "ci95_lo": stats["ci95"][0],
                         "ci95_hi": stats["ci95"][1],
@@ -761,6 +824,8 @@ def aggregate_reports(run_dirs: List[Path], output_dir: Path, options: Aggregate
                         "n": stats.get("n", 0),
                         "p_value": stats.get("p_value", float("nan")),
                         "p_adj_bh": stats.get("p_adj_bh", float("nan")),
+                        "paired_median_difference": stats.get("paired_median_difference", float("nan")),
+                        "effect_size_rank_biserial": stats.get("effect_size_rank_biserial", float("nan")),
                         "significant_0p05": stats.get("significant_0p05", False),
                     }
                 )
@@ -911,6 +976,7 @@ def run_protocol(args: argparse.Namespace) -> None:
     output_root = Path(args.output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     python_bin = args.python_bin
+    runner_cmd = str(args.runner_cmd).replace("{python_bin}", _shell_quote(str(python_bin)))
     seeds = _split_arg(args.seeds, cast=int) if args.seeds else list(DEFAULT_SEEDS)
 
     if args.manifest:
@@ -967,7 +1033,7 @@ def run_protocol(args: argparse.Namespace) -> None:
             "--output-dir",
             str(run_dir),
             "--runner-cmd",
-            args.runner_cmd,
+            runner_cmd,
             "--codecs",
             args.codecs,
             "--ablations",
@@ -988,6 +1054,8 @@ def run_protocol(args: argparse.Namespace) -> None:
             str(float(args.clipping_gate_fraction)),
             "--top-n-presets",
             str(int(args.top_n_presets)),
+            "--palette-metric-limit",
+            str(int(args.palette_metric_limit)),
         ]
         if int(args.clip_limit) > 0:
             evaluate_cmd.extend(["--clip-limit", str(int(args.clip_limit))])
@@ -1238,6 +1306,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--bootstrap", type=int, default=2000)
     run_p.add_argument("--clip-limit", type=int, default=0)
     run_p.add_argument("--top-n-presets", type=int, default=8)
+    run_p.add_argument("--palette-metric-limit", type=int, default=64)
     run_p.add_argument("--duration-drift-gate-ms", type=float, default=120.0)
     run_p.add_argument("--determinism-gate-rate", type=float, default=1.0)
     run_p.add_argument("--envelope-corr-gate", type=float, default=0.90)

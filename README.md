@@ -8,6 +8,8 @@ A JUCE-based VST3/AU insert effect that morphs incoming audio into a palette of 
 - `python_project_idea.py` – RVQ-aware Python prototype (continuity + Top-K mixing) for rapid iteration.
 - `tools/evaluate_morphing.py` – deterministic evaluation harness (4 ablations + objective metrics).
 - `tools/run_morph_ablation.py` – single-run ablation worker that emits audio/tokens/match indices/latency.
+- `tools/build_dataset_manifests.py` – immutable dataset manifest builder with hashes, license filters, and eval-pair CSVs.
+- `tools/paper_experiment_suite.py` – paper artifact builder for DAC, sequence, RVQ, rho, grain/hop, runtime, and listening summaries.
 - `requirements.txt` – Python dependencies for the export tool and prototype notebooks.
 
 ## Terminology
@@ -224,6 +226,15 @@ Interactive dashboard:
 ```bash
 python tools/eval_dashboard.py
 ```
+
+Paper-strengthening protocol:
+```bash
+python tools/build_dataset_manifests.py --palette-dir /data/palette --source-dir /data/source --reference-dir /data/reference --metadata-csv /data/metadata.csv --out-dir data/manifests --test-pairs 96 --strict
+python tools/paper_eval_protocol.py run --manifest data/manifests/eval_manifest_test.json --skip-prepare --skip-data-audit --output-root artifacts/paper/dac_full96 --codecs dac --ablations greedy_full_layer,greedy_rvq_group,beam_full_layer,beam_rvq_group --clip-limit 96 --seeds 1234
+python tools/paper_experiment_suite.py dac-main --run-dirs artifacts/paper/dac_full96/seed_1234
+```
+
+See `docs/paper_evaluation_protocol.md` for the full DAC, sequence, RVQ-band, rho, grain/hop, runtime, SpectroStream, and listening-test artifact map.
 
 ## Roadmap (Short)
 

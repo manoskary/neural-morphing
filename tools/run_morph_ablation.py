@@ -81,15 +81,33 @@ def main() -> None:
     parser.add_argument("--tokens-npy", required=True, help="Output morphed tokens (.npy)")
     parser.add_argument("--match-indices-npy", required=True, help="Output matched index path (.npy)")
     parser.add_argument("--latency-json", required=True, help="Output latency JSON path")
+    parser.add_argument("--diagnostics-json", default="", help="Optional output path for sequence/RVQ diagnostics JSON")
     parser.add_argument("--model", default="descript/dac_44khz", help="DAC model name/path")
     parser.add_argument("--codec", choices=["dac", "spectrostream"], default="dac")
-    parser.add_argument("--matcher", choices=["greedy", "beam"], default="beam")
-    parser.add_argument("--swap", choices=["full_layer", "rvq_group"], default="full_layer")
+    parser.add_argument("--matcher", choices=["greedy", "greedy_smooth", "beam", "viterbi"], default="beam")
+    parser.add_argument(
+        "--swap",
+        choices=[
+            "identity",
+            "coarse_gated",
+            "coarse_forced",
+            "middle_only",
+            "fine_only",
+            "middle_fine",
+            "rvq_group",
+            "rvq_group_current",
+            "full_layer",
+            "full_layer_gated",
+            "full_layer_forced",
+        ],
+        default="full_layer",
+    )
     parser.add_argument("--seed", type=int, default=1234, help="Deterministic seed")
     parser.add_argument("--temperature", type=float, default=None, help="Override (default: tuned per codec)")
     parser.add_argument("--threshold", type=float, default=None, help="Override (default: tuned per codec)")
     parser.add_argument("--continuity", type=float, default=None, help="Override (default: tuned per codec)")
     parser.add_argument("--rvq-focus", type=float, default=None, help="Override (default: tuned per codec)")
+    parser.add_argument("--rho", dest="rvq_focus", type=float, default=None, help="Alias for --rvq-focus")
     parser.add_argument("--unit", type=int, default=None, help="Override (default: tuned per codec)")
     parser.add_argument("--stride", type=int, default=None, help="Override (default: tuned per codec)")
     parser.add_argument("--top-k", type=int, default=None, help="Override (default: tuned per codec)")
@@ -148,10 +166,13 @@ def main() -> None:
     out_tokens = Path(args.tokens_npy)
     out_match = Path(args.match_indices_npy)
     out_latency = Path(args.latency_json)
+    out_diagnostics = Path(args.diagnostics_json) if args.diagnostics_json else None
     out_wav.parent.mkdir(parents=True, exist_ok=True)
     out_tokens.parent.mkdir(parents=True, exist_ok=True)
     out_match.parent.mkdir(parents=True, exist_ok=True)
     out_latency.parent.mkdir(parents=True, exist_ok=True)
+    if out_diagnostics is not None:
+        out_diagnostics.parent.mkdir(parents=True, exist_ok=True)
 
     audio_f32 = np.asarray(audio, dtype=np.float32) / 32767.0
     sf.write(out_wav, audio_f32, sr)
@@ -161,6 +182,12 @@ def main() -> None:
     np.save(out_match, match_arr)
 
     timings = debug.get("timings", {})
+    diagnostics = debug.get("diagnostics", {})
+    if out_diagnostics is not None:
+        out_diagnostics.write_text(json.dumps(diagnostics, indent=2))
+
+    sequence = diagnostics.get("sequence", {}) if isinstance(diagnostics, dict) else {}
+    token_change_rates = diagnostics.get("token_change_rates", {}) if isinstance(diagnostics, dict) else {}
     source_info = sf.info(args.source)
     expected_output_samples = int(round((source_info.frames / max(source_info.samplerate, 1)) * sr))
     output_samples = int(audio_f32.shape[0]) if audio_f32.ndim > 0 else 0
@@ -204,6 +231,20 @@ def main() -> None:
         "total_ms": total_ms,
         "audio_seconds": audio_seconds,
         "end_to_end_rtf": end_to_end_rtf,
+        "diagnostics_json": str(out_diagnostics) if out_diagnostics is not None else "",
+        "objective_j": sequence.get("objective_j", float("nan")),
+        "emission_cost": sequence.get("emission_cost", float("nan")),
+        "transition_cost": sequence.get("transition_cost", float("nan")),
+        "weighted_transition_cost": sequence.get("weighted_transition_cost", float("nan")),
+        "sequence_runtime_ms": sequence.get("runtime_ms", float("nan")),
+        "file_switch_rate": sequence.get("file_switch_rate", float("nan")),
+        "adjacent_step_rate": sequence.get("adjacent_step_rate", float("nan")),
+        "coarse_transfer_fraction": diagnostics.get("coarse_transfer_fraction", float("nan")) if isinstance(diagnostics, dict) else float("nan"),
+        "coarse_fallback_fraction": diagnostics.get("coarse_fallback_fraction", float("nan")) if isinstance(diagnostics, dict) else float("nan"),
+        "token_change_rate_coarse": token_change_rates.get("coarse", float("nan")),
+        "token_change_rate_middle": token_change_rates.get("middle", float("nan")),
+        "token_change_rate_fine": token_change_rates.get("fine", float("nan")),
+        "token_change_rate_overall": token_change_rates.get("overall", float("nan")),
     }
     out_latency.write_text(json.dumps(payload, indent=2))
 
