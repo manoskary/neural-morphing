@@ -1,0 +1,52 @@
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{llllllll}
+\toprule
+codec\_id & ablation\_id & metric & n & mean & median & ci95\_lo & ci95\_hi \\
+\midrule
+dac & greedy\_full\_layer & fad & 96 & 0.1721 & 0.1721 & 0.1721 & 0.1721 \\
+dac & greedy\_full\_layer & spectral\_convergence & 96 & 1.397 & 1.308 & 1.334 & 1.463 \\
+dac & greedy\_full\_layer & log\_spectral\_distance & 96 & 27.09 & 26.62 & 26.43 & 27.76 \\
+dac & greedy\_full\_layer & token\_discontinuity & 96 & 0.8433 & 0.8501 & 0.8211 & 0.8642 \\
+dac & greedy\_full\_layer & envelope\_correlation & 96 & 0.9987 & 0.9989 & 0.9985 & 0.9989 \\
+dac & greedy\_full\_layer & index\_jitter & 96 & 2.466e+04 & 2.473e+04 & 2.42e+04 & 2.514e+04 \\
+dac & greedy\_full\_layer & source\_onset\_f1 & 96 & 0.9881 & 1 & 0.9837 & 0.9919 \\
+dac & greedy\_full\_layer & output\_to\_nearest\_palette\_distance & 96 & 21.86 & 21.52 & 21.38 & 22.31 \\
+dac & greedy\_full\_layer & palette\_embedding\_shift & 96 & -11.29 & -11.19 & -11.62 & -10.98 \\
+dac & greedy\_full\_layer & end\_to\_end\_rtf & 96 & 0.2231 & 0.2302 & 0.2097 & 0.2364 \\
+dac & greedy\_rvq\_group & fad & 96 & 0.9608 & 0.9608 & 0.9608 & 0.9608 \\
+dac & greedy\_rvq\_group & spectral\_convergence & 96 & 1.31 & 1.235 & 1.256 & 1.366 \\
+dac & greedy\_rvq\_group & log\_spectral\_distance & 96 & 26.93 & 26.52 & 26.28 & 27.59 \\
+dac & greedy\_rvq\_group & token\_discontinuity & 96 & 0.8059 & 0.8102 & 0.7814 & 0.8303 \\
+dac & greedy\_rvq\_group & envelope\_correlation & 96 & 0.9875 & 0.9884 & 0.9863 & 0.9885 \\
+dac & greedy\_rvq\_group & index\_jitter & 96 & 2.466e+04 & 2.473e+04 & 2.42e+04 & 2.514e+04 \\
+dac & greedy\_rvq\_group & source\_onset\_f1 & 96 & 0.9763 & 0.9825 & 0.9699 & 0.9821 \\
+dac & greedy\_rvq\_group & output\_to\_nearest\_palette\_distance & 96 & 21.56 & 21.44 & 21.11 & 22.01 \\
+dac & greedy\_rvq\_group & palette\_embedding\_shift & 96 & -10.37 & -10.25 & -10.69 & -10.07 \\
+dac & greedy\_rvq\_group & end\_to\_end\_rtf & 96 & 0.232 & 0.2339 & 0.2163 & 0.2472 \\
+dac & beam\_full\_layer & fad & 96 & 0.1721 & 0.1721 & 0.1721 & 0.1721 \\
+dac & beam\_full\_layer & spectral\_convergence & 96 & 1.397 & 1.308 & 1.334 & 1.463 \\
+dac & beam\_full\_layer & log\_spectral\_distance & 96 & 27.09 & 26.62 & 26.43 & 27.76 \\
+dac & beam\_full\_layer & token\_discontinuity & 96 & 0.8433 & 0.8501 & 0.8211 & 0.8642 \\
+dac & beam\_full\_layer & envelope\_correlation & 96 & 0.9987 & 0.9989 & 0.9985 & 0.9989 \\
+dac & beam\_full\_layer & index\_jitter & 96 & 1.152e+04 & 1.113e+04 & 1.112e+04 & 1.193e+04 \\
+dac & beam\_full\_layer & source\_onset\_f1 & 96 & 0.9881 & 1 & 0.9837 & 0.9919 \\
+dac & beam\_full\_layer & output\_to\_nearest\_palette\_distance & 96 & 21.86 & 21.52 & 21.38 & 22.31 \\
+dac & beam\_full\_layer & palette\_embedding\_shift & 96 & -11.29 & -11.19 & -11.62 & -10.98 \\
+dac & beam\_full\_layer & end\_to\_end\_rtf & 96 & 0.236 & 0.2387 & 0.2209 & 0.2515 \\
+dac & beam\_rvq\_group & fad & 96 & 1.134 & 1.134 & 1.134 & 1.134 \\
+dac & beam\_rvq\_group & spectral\_convergence & 96 & 1.307 & 1.225 & 1.252 & 1.363 \\
+dac & beam\_rvq\_group & log\_spectral\_distance & 96 & 27.04 & 26.63 & 26.38 & 27.71 \\
+dac & beam\_rvq\_group & token\_discontinuity & 96 & 0.8013 & 0.8087 & 0.7764 & 0.826 \\
+dac & beam\_rvq\_group & envelope\_correlation & 96 & 0.9859 & 0.9872 & 0.9841 & 0.9873 \\
+dac & beam\_rvq\_group & index\_jitter & 96 & 1.152e+04 & 1.113e+04 & 1.112e+04 & 1.193e+04 \\
+dac & beam\_rvq\_group & source\_onset\_f1 & 96 & 0.9761 & 1 & 0.969 & 0.9824 \\
+dac & beam\_rvq\_group & output\_to\_nearest\_palette\_distance & 96 & 21.67 & 21.55 & 21.21 & 22.13 \\
+dac & beam\_rvq\_group & palette\_embedding\_shift & 96 & -10.36 & -10.21 & -10.69 & -10.05 \\
+dac & beam\_rvq\_group & end\_to\_end\_rtf & 96 & 0.2172 & 0.2275 & 0.204 & 0.2304 \\
+\bottomrule
+\end{tabular}
+\caption{Main 96-pair DAC objective evaluation.}
+\label{tab:dac-main-full96}
+\end{table}

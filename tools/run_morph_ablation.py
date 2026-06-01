@@ -9,6 +9,7 @@ import json
 import os
 import random
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -55,6 +56,100 @@ def _read_palette_manifest(path: Path) -> list[str]:
     return files
 
 
+def _palette_cache_key(codec: str, model: str, runtime_params: dict, palette_files: list[str]) -> str:
+    hasher = hashlib.sha256()
+    hasher.update(b"neural-morphing-palette-cache-v1\0")
+    for part in (codec, model, runtime_params["unit"], runtime_params["stride"]):
+        hasher.update(str(part).encode("utf-8"))
+        hasher.update(b"\0")
+    for raw in palette_files:
+        path = Path(raw).expanduser().resolve()
+        hasher.update(str(path).encode("utf-8"))
+        try:
+            stat = path.stat()
+        except OSError:
+            hasher.update(b":missing")
+            continue
+        hasher.update(f":{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8"))
+        hasher.update(b"\0")
+    return hasher.hexdigest()
+
+
+def _load_palette_cache(synth, cache_file: Path, meta_file: Path, cache_key: str, palette_files: list[str]) -> bool:
+    if not cache_file.exists() or not meta_file.exists():
+        return False
+    try:
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        if meta.get("cache_key") != cache_key:
+            return False
+        with np.load(cache_file) as data:
+            palette_codes = np.array(data["palette_codes"], copy=True)
+            palette_desc_full = np.array(data["palette_desc_full"], copy=True)
+            group_descs = [np.array(data[f"palette_desc_group_{idx}"], copy=True) for idx in range(3)]
+            file_ids = np.array(data["palette_file_ids"], copy=True)
+            frame_indices = np.array(data["palette_frame_indices"], copy=True)
+    except Exception as exc:
+        print(f"Palette cache ignored ({cache_file}): {exc}")
+        return False
+
+    synth.files = [str(Path(p).expanduser().resolve()) for p in palette_files]
+    synth.last_aug = False
+    synth.prev_best_index = None
+    synth.rvq_groups = [list(map(int, group)) for group in meta.get("rvq_groups", [])]
+    if synth.codebook_embeddings is None:
+        synth.codebook_embeddings = synth._load_codebook_embeddings()
+    synth.palette_codes = torch.from_numpy(palette_codes.astype(np.int16, copy=False))
+    synth.palette_desc_full = torch.from_numpy(palette_desc_full.astype(np.float32, copy=False))
+    synth.palette_desc_groups = [torch.from_numpy(arr.astype(np.float32, copy=False)) for arr in group_descs]
+    synth.palette_file_ids = file_ids.astype(np.int32, copy=False)
+    synth.palette_frame_indices = frame_indices.astype(np.int64, copy=False)
+    return bool(synth.palette_codes.numel() > 0)
+
+
+def _save_palette_cache(
+    synth,
+    cache_file: Path,
+    meta_file: Path,
+    cache_key: str,
+    palette_files: list[str],
+    runtime_params: dict,
+) -> None:
+    if synth.palette_codes is None or synth.palette_desc_full is None or synth.palette_desc_groups is None:
+        return
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    arrays = {
+        "palette_codes": synth.palette_codes.cpu().numpy(),
+        "palette_desc_full": synth.palette_desc_full.cpu().numpy(),
+        "palette_file_ids": np.asarray(synth.palette_file_ids, dtype=np.int32),
+        "palette_frame_indices": np.asarray(synth.palette_frame_indices, dtype=np.int64),
+    }
+    for idx in range(3):
+        if idx < len(synth.palette_desc_groups):
+            arrays[f"palette_desc_group_{idx}"] = synth.palette_desc_groups[idx].cpu().numpy()
+        else:
+            arrays[f"palette_desc_group_{idx}"] = np.empty((synth.palette_codes.shape[0], 0), dtype=np.float32)
+
+    with tempfile.NamedTemporaryFile(prefix=cache_file.stem + ".", suffix=".npz", dir=str(cache_file.parent), delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        np.savez(tmp_path, **arrays)
+        os.replace(tmp_path, cache_file)
+        meta = {
+            "cache_key": cache_key,
+            "codec": getattr(synth, "codec_id", ""),
+            "model": getattr(synth, "model_name", ""),
+            "unit": int(runtime_params["unit"]),
+            "stride": int(runtime_params["stride"]),
+            "rvq_groups": [list(map(int, group)) for group in (synth.rvq_groups or [])],
+            "palette_files": [str(Path(p).expanduser().resolve()) for p in palette_files],
+            "num_grains": int(synth.palette_codes.shape[0]),
+        }
+        meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
 def _codec_defaults(codec_id: str) -> dict:
     codec = (codec_id or "dac").strip().lower()
     return dict(TUNED_CODEC_PARAMS.get(codec, TUNED_CODEC_PARAMS["dac"]))
@@ -71,6 +166,19 @@ def _resolve_runtime_params(codec_id: str, args: argparse.Namespace) -> dict:
         "stride": int(args.stride) if args.stride is not None else int(defaults["stride"]),
         "top_k": int(args.top_k) if args.top_k is not None else int(defaults["top_k"]),
     }
+
+
+def _apply_cuda_memory_fraction() -> float | None:
+    raw = os.getenv("NEURAL_MORPHING_CUDA_MEMORY_FRACTION", "").strip()
+    if not raw:
+        return None
+    fraction = float(raw)
+    if not (0.0 < fraction <= 1.0):
+        raise ValueError("NEURAL_MORPHING_CUDA_MEMORY_FRACTION must be in (0, 1].")
+    if torch.cuda.is_available():
+        torch.cuda.set_per_process_memory_fraction(fraction, device=0)
+        return fraction
+    return None
 
 
 def main() -> None:
@@ -111,6 +219,7 @@ def main() -> None:
     parser.add_argument("--unit", type=int, default=None, help="Override (default: tuned per codec)")
     parser.add_argument("--stride", type=int, default=None, help="Override (default: tuned per codec)")
     parser.add_argument("--top-k", type=int, default=None, help="Override (default: tuned per codec)")
+    parser.add_argument("--palette-cache-dir", default="", help="Optional directory for cached encoded palette tensors")
     args = parser.parse_args()
     runtime_params = _resolve_runtime_params(args.codec, args)
 
@@ -137,6 +246,8 @@ def main() -> None:
             os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
             os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
+    cuda_memory_fraction = _apply_cuda_memory_fraction()
+
     from python_project_idea import LatentGranularSynthesis
 
     random.seed(args.seed)
@@ -156,10 +267,24 @@ def main() -> None:
     synth.set_topk(runtime_params["top_k"])
     synth.set_ablation(args.matcher, args.swap)
 
-    result = synth.build_dataset(palette_files, aug_checkbox=False)
-    msg = str(result.get("message", ""))
-    if "Done!" not in msg and "Codebook grains" not in msg:
-        raise RuntimeError(f"Palette build failed: {msg}")
+    loaded_from_cache = False
+    cache_file = None
+    meta_file = None
+    cache_key = ""
+    if args.palette_cache_dir:
+        cache_key = _palette_cache_key(args.codec, args.model, runtime_params, palette_files)
+        cache_root = Path(args.palette_cache_dir)
+        cache_file = cache_root / f"{cache_key}.npz"
+        meta_file = cache_root / f"{cache_key}.json"
+        loaded_from_cache = _load_palette_cache(synth, cache_file, meta_file, cache_key, palette_files)
+
+    if not loaded_from_cache:
+        result = synth.build_dataset(palette_files, aug_checkbox=False)
+        msg = str(result.get("message", ""))
+        if "Done!" not in msg and "Codebook grains" not in msg:
+            raise RuntimeError(f"Palette build failed: {msg}")
+        if cache_file is not None and meta_file is not None:
+            _save_palette_cache(synth, cache_file, meta_file, cache_key, palette_files, runtime_params)
 
     sr, audio, debug = synth.morph_audio(args.source, return_debug=True)
     out_wav = Path(args.output_wav)
@@ -212,6 +337,9 @@ def main() -> None:
         "swap": args.swap,
         "seed": int(args.seed),
         "runtime_params": runtime_params,
+        "cuda_memory_fraction": cuda_memory_fraction if cuda_memory_fraction is not None else "",
+        "palette_cache_hit": bool(loaded_from_cache),
+        "palette_cache_file": str(cache_file) if cache_file is not None else "",
         "encode_ok": bool(encode_ms > 0.0),
         "decode_ok": bool(decode_ms > 0.0),
         "token_layout_valid": token_layout_valid,

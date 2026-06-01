@@ -96,6 +96,19 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2))
 
 
+def _unique_paths(paths: Iterable[Path]) -> List[Path]:
+    seen = set()
+    out: List[Path] = []
+    for path in paths:
+        resolved = Path(path).resolve()
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(resolved)
+    return out
+
+
 def _bootstrap_ci(values: List[float], alpha: float = 0.05, n_boot: int = 2000, seed: int = 0) -> tuple[float, float]:
     arr = np.asarray([v for v in values if not math.isnan(v)], dtype=np.float64)
     if arr.size == 0:
@@ -773,7 +786,13 @@ def evaluate(args: argparse.Namespace) -> None:
                 }
                 _write_json(config_json, config_payload)
 
-                if args.runner_cmd:
+                outputs_ready = (
+                    output_wav.exists()
+                    and tokens_npy.exists()
+                    and match_indices_npy.exists()
+                    and latency_json.exists()
+                )
+                if args.runner_cmd and not (args.resume_existing and outputs_ready):
                     context = {
                         "codec": codec_id,
                         "source": _shell_quote(str(clip.source)),
@@ -801,6 +820,8 @@ def evaluate(args: argparse.Namespace) -> None:
                         _run_command_template(args.runner_cmd, context)
                     else:
                         print("DRY RUN:", args.runner_cmd.format(**context))
+                elif args.runner_cmd and args.resume_existing and outputs_ready:
+                    print(f"resume-existing: reusing {output_wav}")
 
                 if not output_wav.exists():
                     rows.append(
@@ -917,6 +938,8 @@ def evaluate(args: argparse.Namespace) -> None:
                 end_to_end_rtf = _to_float(latency_payload.get("end_to_end_rtf", float("nan")))
                 failure_count = int(_to_float(latency_payload.get("failure_count", 0), default=0.0))
                 retry_count = int(_to_float(latency_payload.get("retry_count", 0), default=0.0))
+                palette_cache_hit = bool(latency_payload.get("palette_cache_hit", False))
+                palette_cache_file = str(latency_payload.get("palette_cache_file", ""))
                 sequence_runtime_ms = _to_float(latency_payload.get("sequence_runtime_ms", float("nan")))
                 objective_j = _to_float(latency_payload.get("objective_j", float("nan")))
                 emission_cost = _to_float(latency_payload.get("emission_cost", float("nan")))
@@ -1030,6 +1053,8 @@ def evaluate(args: argparse.Namespace) -> None:
                     "determinism_pass": determinism_pass,
                     "failure_count": float(failure_count),
                     "retry_count": float(retry_count),
+                    "palette_cache_hit": float(palette_cache_hit),
+                    "palette_cache_file": palette_cache_file,
                     "encode_ms": encode_ms,
                     "decode_ms": decode_ms,
                     "total_ms": total_ms,
@@ -1067,9 +1092,11 @@ def evaluate(args: argparse.Namespace) -> None:
         for ablation in selected_ablation_defs:
             ab_id = ablation["id"]
             condition_key = f"{codec_id}::{ab_id}"
+            reference_wavs = _unique_paths(refs_for_fad.get(codec_id, []))
+            generated_wavs = _unique_paths(generated_for_fad.get(condition_key, []))
             fad_payload = metric_fad(
-                reference_wavs=refs_for_fad.get(codec_id, []),
-                generated_wavs=generated_for_fad.get(condition_key, []),
+                reference_wavs=reference_wavs,
+                generated_wavs=generated_wavs,
             )
             fad_score = float(fad_payload.get("score", float("nan")))
             fad_status[condition_key] = str(fad_payload.get("status", "unknown"))
@@ -1374,6 +1401,8 @@ def evaluate(args: argparse.Namespace) -> None:
         "determinism_pass",
         "failure_count",
         "retry_count",
+        "palette_cache_hit",
+        "palette_cache_file",
         "encode_ms",
         "decode_ms",
         "total_ms",
@@ -1702,6 +1731,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ev.add_argument("--codecs", default="dac,spectrostream", help="Comma-separated codecs to evaluate.")
     ev.add_argument("--ablations", default="greedy_full_layer,greedy_rvq_group,beam_full_layer,beam_rvq_group", help="Comma-separated ablation ids to evaluate.")
     ev.add_argument("--determinism-runs", type=int, default=2, help="Repeated runs per condition/clip for determinism check.")
+    ev.add_argument("--resume-existing", action="store_true", help="Reuse complete per-clip runner outputs instead of regenerating them.")
     ev.add_argument("--duration-drift-gate-ms", type=float, default=120.0, help="Gate threshold for duration drift abs p95.")
     ev.add_argument("--determinism-gate-rate", type=float, default=1.0, help="Gate threshold for determinism pass rate.")
     ev.add_argument("--envelope-corr-gate", type=float, default=0.90, help="Minimum envelope correlation mean for health gate.")

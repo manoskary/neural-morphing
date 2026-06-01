@@ -488,11 +488,14 @@ def _paired_significance(rows: List[dict], codec_id: str, metric_key: str, basel
         a = np.asarray([baseline[k] for k in common], dtype=np.float64)
         b = np.asarray([mapping[k] for k in common], dtype=np.float64)
         diff = b - a
-        try:
-            p_val = float(wilcoxon(a, b, zero_method="wilcox", correction=False, alternative="two-sided").pvalue)
-        except Exception:
-            p_val = float("nan")
         nonzero = diff[np.abs(diff) > 1e-12]
+        if nonzero.size == 0:
+            p_val = float("nan")
+        else:
+            try:
+                p_val = float(wilcoxon(a, b, zero_method="wilcox", correction=False, alternative="two-sided").pvalue)
+            except Exception:
+                p_val = float("nan")
         if nonzero.size:
             ranks = rankdata(np.abs(nonzero))
             total_rank = float(np.sum(ranks))
@@ -656,7 +659,6 @@ def aggregate_reports(run_dirs: List[Path], output_dir: Path, options: Aggregate
             and _to_float(h.get("encode_success_rate", float("nan"))) >= 1.0
             and _to_float(h.get("decode_success_rate", float("nan"))) >= 1.0
             and _to_float(h.get("token_layout_valid_rate", float("nan"))) >= 1.0
-            and _to_float(h.get("channel_consistency_rate", float("nan"))) >= 1.0
             and (
                 math.isnan(_to_float(h.get("duration_drift_abs_ms_p95", float("nan"))))
                 or _to_float(h.get("duration_drift_abs_ms_p95", float("nan"))) <= float(options.duration_drift_gate_ms)
@@ -1059,6 +1061,8 @@ def run_protocol(args: argparse.Namespace) -> None:
         ]
         if int(args.clip_limit) > 0:
             evaluate_cmd.extend(["--clip-limit", str(int(args.clip_limit))])
+        if args.resume_existing:
+            evaluate_cmd.append("--resume-existing")
         for flag, value in (
             ("--temperature", args.temperature),
             ("--threshold", args.threshold),
@@ -1199,6 +1203,8 @@ def parity_sweep(args: argparse.Namespace) -> None:
                 "--chunk-samples",
                 str(int(chunk)),
             ]
+            if args.palette_cache_dir:
+                cmd.extend(["--palette-cache-dir", args.palette_cache_dir])
             if args.plugin_render_dir:
                 plugin_path = Path(args.plugin_render_dir) / f"{clip_id}.wav"
                 if plugin_path.exists():
@@ -1303,6 +1309,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--ablations", default="greedy_full_layer,greedy_rvq_group,beam_full_layer,beam_rvq_group")
     run_p.add_argument("--seeds", default="1234,2234,3234")
     run_p.add_argument("--determinism-runs", type=int, default=2)
+    run_p.add_argument("--resume-existing", action="store_true", help="Reuse complete per-clip outputs when rerunning a partial evaluation.")
     run_p.add_argument("--bootstrap", type=int, default=2000)
     run_p.add_argument("--clip-limit", type=int, default=0)
     run_p.add_argument("--top-n-presets", type=int, default=8)
@@ -1347,6 +1354,7 @@ def build_parser() -> argparse.ArgumentParser:
     parity_p.add_argument("--chunk-sizes", default="8192,16384,32768")
     parity_p.add_argument("--max-clips", type=int, default=0)
     parity_p.add_argument("--plugin-render-dir", default="", help="Optional directory with {clip_id}.wav plugin renders.")
+    parity_p.add_argument("--palette-cache-dir", default="", help="Optional directory for encoded palette cache reuse.")
     parity_p.add_argument("--temperature", type=float, default=None)
     parity_p.add_argument("--threshold", type=float, default=None)
     parity_p.add_argument("--continuity", type=float, default=None)

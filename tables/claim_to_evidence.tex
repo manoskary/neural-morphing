@@ -1,0 +1,16 @@
+\begin{table*}[t]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{0.18\textwidth}p{0.15\textwidth}p{0.10\textwidth}p{0.19\textwidth}p{0.19\textwidth}p{0.13\textwidth}}
+\toprule
+Claim & Experiment & Split & Metric & Result & Limitation \\
+\midrule
+Beam/sequence optimization improves palette-path continuity. & Sequence optimizer comparison & test & J, transition cost, index jitter, file-switch rate & sequence: median jitter 24727.77 -> 11134.44 for greedy\_rvq\_group vs beam\_rvq\_group. & Bounded by retained Top-K candidates. \\
+RVQ-group transfer exposes source-structure vs palette-detail control. & RVQ threshold/band and rho sweeps & test diagnostics & token change rates, source/onset metrics, palette distance & coarse activation 0.0% at 0.40 and 100.0% at 1.00; palette shift -10.521 -> -10.323 over rho sweep. & Coarse gate claim depends on activation fraction. \\
+The method is deployable under realistic palette/chunk/runtime constraints. & Chunk/block parity and palette scaling & test/runtime & RTF, latency, sequence runtime, parity SC/LSD & best diagnostic RTF 0.233 at unit/stride 7/2; palette scaling reaches 247 clips at median RTF 0.236; chunk parity at 32768 samples has SC 0.291 and LSD 8.675. & Hardware and backend dependent. \\
+\bottomrule
+\end{tabular}
+\caption{Claim-to-evidence map.}
+\label{tab:claim-evidence}
+\end{table*}

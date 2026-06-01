@@ -34,6 +34,7 @@ from tools.evaluate_morphing import (  # noqa: E402
     metric_spectral_convergence,
     metric_waveform_discontinuity,
 )
+from tools.run_morph_ablation import _load_palette_cache, _palette_cache_key, _save_palette_cache  # noqa: E402
 
 TUNED_CODEC_PARAMS = {
     "dac": {
@@ -147,6 +148,7 @@ def main() -> None:
     parser.add_argument("--top-k", dest="top_k", type=int, default=None, help="Override (default: tuned per codec)")
     parser.add_argument("--chunk-samples", type=int, default=32768)
     parser.add_argument("--plugin-render-wav", default="", help="Optional exported standalone/VST render WAV for direct comparison.")
+    parser.add_argument("--palette-cache-dir", default="", help="Optional directory for cached encoded palette tensors")
     args = parser.parse_args()
     runtime_params = _resolve_runtime_params(args.codec, args)
 
@@ -162,9 +164,23 @@ def main() -> None:
     synth.set_topk(runtime_params["top_k"])
     synth.set_ablation(args.matcher, args.swap)
 
-    build = synth.build_dataset(palette_files, aug_checkbox=False)
-    if "Done!" not in str(build.get("message", "")) and "Codebook grains" not in str(build.get("message", "")):
-        raise RuntimeError(f"Palette build failed: {build}")
+    loaded_from_cache = False
+    cache_file = None
+    meta_file = None
+    cache_key = ""
+    if args.palette_cache_dir:
+        cache_key = _palette_cache_key(args.codec, args.model, runtime_params, palette_files)
+        cache_root = Path(args.palette_cache_dir)
+        cache_file = cache_root / f"{cache_key}.npz"
+        meta_file = cache_root / f"{cache_key}.json"
+        loaded_from_cache = _load_palette_cache(synth, cache_file, meta_file, cache_key, palette_files)
+
+    if not loaded_from_cache:
+        build = synth.build_dataset(palette_files, aug_checkbox=False)
+        if "Done!" not in str(build.get("message", "")) and "Codebook grains" not in str(build.get("message", "")):
+            raise RuntimeError(f"Palette build failed: {build}")
+        if cache_file is not None and meta_file is not None:
+            _save_palette_cache(synth, cache_file, meta_file, cache_key, palette_files, runtime_params)
 
     source_path = Path(args.source)
     if not source_path.exists():
@@ -223,6 +239,8 @@ def main() -> None:
             "stride": runtime_params["stride"],
             "top_k": runtime_params["top_k"],
             "chunk_samples": chunk_samples,
+            "palette_cache_hit": bool(loaded_from_cache),
+            "palette_cache_file": str(cache_file) if cache_file is not None else "",
         },
         "paths": {
             "python_full_wav": str((out_dir / "python_full.wav").resolve()),

@@ -20,6 +20,7 @@ from evaluate_morphing import (
     ClipEntry,
     _check_manifest_leakage,
     _resolve_runtime_params,
+    _unique_paths,
     metric_clipping_fraction,
     metric_envelope_correlation,
     metric_log_spectral_distance,
@@ -67,6 +68,16 @@ class MultiMetricTests(unittest.TestCase):
             report = _check_manifest_leakage([palette_wav], clips)
             self.assertFalse(report["ok"])
             self.assertGreaterEqual(len(report["hash_overlap_palette_source"]), 1)
+
+    def test_unique_paths_preserves_order(self):
+        with tempfile.TemporaryDirectory(prefix="nm_eval_test_") as td:
+            root = Path(td)
+            a = root / "a.wav"
+            b = root / "b.wav"
+            a.write_bytes(b"a")
+            b.write_bytes(b"b")
+            unique = _unique_paths([a, b, a, a.resolve(), b])
+            self.assertEqual(unique, [a.resolve(), b.resolve()])
 
     def test_clipping_fraction(self):
         unclipped = np.linspace(-0.8, 0.8, 1000, dtype=np.float32)

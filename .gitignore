@@ -23,6 +23,7 @@ __pycache__/
 # Virtual environments
 venv/
 env/
+.venv/
 
 # Temporary files
 *.tmp
@@ -31,6 +32,9 @@ env/
 /build/
 /build_nopy/
 /artifacts/
+/logs/
+/listening/
+/hf-space-neural-morphing/
 
 # any wave files
 *.wav

@@ -1,0 +1,20 @@
+{
+  "dac_root": "/home/manos/codes/neural-morphing/artifacts/validation/paper_eval_dac_pilot",
+  "dac_parity_root": "/home/manos/codes/neural-morphing/artifacts/validation/paper_eval_dac_pilot",
+  "spectro_root": "/home/manos/codes/neural-morphing/artifacts/validation/paper_eval_spectro_pilot_3x4",
+  "spectro_parity_root": "/home/manos/codes/neural-morphing/artifacts/validation/paper_eval_spectro_pilot_3x4",
+  "codicodec_root": "/home/manos/codes/neural-morphing/artifacts/validation/paper_eval_codicodec_pilot",
+  "codicodec_parity_root": "/home/manos/codes/neural-morphing/artifacts/validation/paper_eval_codicodec_pilot",
+  "generated": [
+    "codicodec_appendix_results_table.tex",
+    "codicodec_parity_table.tex",
+    "codicodec_significance_table.tex",
+    "dac_health_table.tex",
+    "dac_main_results_table.tex",
+    "dac_parity_table.tex",
+    "dac_significance_table.tex",
+    "spectro_appendix_results_table.tex",
+    "spectro_parity_table.tex",
+    "spectro_significance_table.tex"
+  ]
+}

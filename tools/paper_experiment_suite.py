@@ -23,13 +23,16 @@ from scipy.stats import rankdata, wilcoxon
 
 
 DEFAULT_MAIN_METRICS = [
+    "fad",
     "spectral_convergence",
     "log_spectral_distance",
+    "token_discontinuity",
     "envelope_correlation",
     "index_jitter",
     "source_onset_f1",
     "output_to_nearest_palette_distance",
     "palette_embedding_shift",
+    "end_to_end_rtf",
 ]
 
 SEQUENCE_METRICS = [
@@ -176,6 +179,13 @@ def _paired_stats(rows: list[dict], metric: str, condition_key: str, baseline_ke
     a = np.asarray([base[k] for k in common], dtype=np.float64)
     b = np.asarray([comp[k] for k in common], dtype=np.float64)
     diff = b - a
+    if not np.any(diff != 0.0):
+        return {
+            "paired_n": len(common),
+            "paired_median_difference": 0.0,
+            "wilcoxon_p": float("nan"),
+            "effect_size_rank_biserial": 0.0,
+        }
     try:
         p_value = float(wilcoxon(a, b, zero_method="wilcox", correction=False, alternative="two-sided").pvalue)
     except Exception:
@@ -207,7 +217,15 @@ def _summarize_conditions(
             values = [_to_float(r.get(metric, float("nan"))) for r in condition_rows]
             values = [v for v in values if not math.isnan(v)]
             ci_lo, ci_hi = _bootstrap_ci(values, bootstrap, seed)
-            paired = _paired_stats(ok_rows, metric, condition_key, f"{codec}::{baseline}")
+            if metric == "fad":
+                paired = {
+                    "paired_n": 0,
+                    "paired_median_difference": float("nan"),
+                    "wilcoxon_p": float("nan"),
+                    "effect_size_rank_biserial": float("nan"),
+                }
+            else:
+                paired = _paired_stats(ok_rows, metric, condition_key, f"{codec}::{baseline}")
             row = {
                 "codec_id": codec,
                 "ablation_id": ablation,
@@ -260,6 +278,38 @@ def _write_latex_table(path: Path, rows: list[dict], columns: list[str], caption
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _latex_escape(value) -> str:
+    return str(value).replace("_", "\\_")
+
+
+def _write_claim_latex_table(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    columns = ["Claim", "Experiment", "Split", "Metric", "Result", "Limitation"]
+    widths = ["0.18\\textwidth", "0.15\\textwidth", "0.10\\textwidth", "0.19\\textwidth", "0.19\\textwidth", "0.13\\textwidth"]
+    lines = [
+        "\\begin{table*}[t]",
+        "\\centering",
+        "\\scriptsize",
+        "\\setlength{\\tabcolsep}{3pt}",
+        "\\begin{tabular}{" + "".join(f"p{{{w}}}" for w in widths) + "}",
+        "\\toprule",
+        " & ".join(columns) + " \\\\",
+        "\\midrule",
+    ]
+    for row in rows:
+        lines.append(" & ".join(_latex_escape(row.get(c, "")) for c in columns) + " \\\\")
+    lines.extend(
+        [
+            "\\bottomrule",
+            "\\end{tabular}",
+            "\\caption{Claim-to-evidence map.}",
+            "\\label{tab:claim-evidence}",
+            "\\end{table*}",
+        ]
+    )
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def _require_matplotlib():
     import matplotlib
 
@@ -268,6 +318,13 @@ def _require_matplotlib():
     from matplotlib.backends.backend_pdf import PdfPages
 
     return plt, PdfPages
+
+
+def _boxplot(ax, data, labels) -> None:
+    try:
+        ax.boxplot(data, tick_labels=labels, showfliers=False)
+    except TypeError:
+        ax.boxplot(data, labels=labels, showfliers=False)
 
 
 def _plot_metric_distributions(path: Path, rows: list[dict], metrics: list[str], codec: str, ablations: list[str]) -> None:
@@ -290,7 +347,7 @@ def _plot_metric_distributions(path: Path, rows: list[dict], metrics: list[str],
             if not data:
                 continue
             fig, ax = plt.subplots(figsize=(9, 4.8))
-            ax.boxplot(data, labels=labels, showfliers=False)
+            _boxplot(ax, data, labels)
             ax.set_title(metric.replace("_", " "))
             ax.set_ylabel(metric)
             ax.tick_params(axis="x", rotation=25)
@@ -382,7 +439,7 @@ def _plot_rvq_diagnostics(
     data = [vals for vals in bands.values() if vals]
     labels = [name for name, vals in bands.items() if vals]
     if data:
-        ax.boxplot(data, labels=labels, showfliers=False)
+        _boxplot(ax, data, labels)
     ax.set_ylabel("Selected emission distance")
     ax.set_title("Emission distributions by RVQ band")
     fig.tight_layout()
@@ -570,6 +627,134 @@ def listening_manifest(args: argparse.Namespace) -> None:
     _write_csv(Path(args.output_csv), manifest, ["set_id", "clip_id", "condition", "source_path", "stimulus_path"])
 
 
+def _find_summary_row(rows: list[dict], metric: str, **filters: str) -> dict | None:
+    for row in rows:
+        if str(row.get("metric", "")) != metric:
+            continue
+        if all(str(row.get(key, "")) == str(value) for key, value in filters.items()):
+            return row
+    return None
+
+
+def _fmt_float(value, digits: int = 3, scale: float = 1.0, suffix: str = "") -> str:
+    number = _to_float(value)
+    if math.isnan(number):
+        return "n/a"
+    return f"{number * scale:.{digits}f}{suffix}"
+
+
+def _claim_sequence_result(args: argparse.Namespace) -> str:
+    sequence_rows = _read_csv(Path(args.sequence_csv))
+    main_rows = _read_csv(Path(args.main_csv))
+    rows = sequence_rows if sequence_rows else main_rows
+    if not rows:
+        return "Pending: generate sequence_optimizer_comparison.csv."
+    greedy = _find_summary_row(rows, "index_jitter", codec_id="dac", ablation_id="greedy_rvq_group")
+    beam = _find_summary_row(rows, "index_jitter", codec_id="dac", ablation_id="beam_rvq_group")
+    if not greedy or not beam:
+        return "Pending: greedy_rvq_group and beam_rvq_group index-jitter rows."
+    source = "sequence" if sequence_rows else "main DAC"
+    return (
+        f"{source}: median jitter "
+        f"{_fmt_float(greedy.get('median'), 2)} -> {_fmt_float(beam.get('median'), 2)} "
+        "for greedy_rvq_group vs beam_rvq_group."
+    )
+
+
+def _claim_rvq_result(args: argparse.Namespace) -> str:
+    threshold_rows = _read_csv(Path(args.rvq_csv))
+    rho_rows = _read_csv(Path(args.rho_csv))
+    parts: list[str] = []
+    if threshold_rows:
+        numeric = sorted(
+            (r for r in threshold_rows if not math.isnan(_to_float(r.get("threshold", float("nan"))))),
+            key=lambda r: _to_float(r.get("threshold", float("nan"))),
+        )
+        if numeric:
+            first = numeric[0]
+            last = numeric[-1]
+            parts.append(
+                "coarse activation "
+                f"{_fmt_float(first.get('coarse_transfer_fraction'), 1, 100.0, '%')} at "
+                f"{first.get('threshold_label')} and "
+                f"{_fmt_float(last.get('coarse_transfer_fraction'), 1, 100.0, '%')} at "
+                f"{last.get('threshold_label')}"
+            )
+    if rho_rows:
+        shift_rows = [
+            r
+            for r in rho_rows
+            if str(r.get("metric", "")) == "palette_embedding_shift"
+            and str(r.get("codec_id", "")) == "dac"
+            and str(r.get("ablation_id", "")) == "beam_rvq_group"
+        ]
+        if shift_rows:
+            shift_rows.sort(key=lambda r: _to_float(r.get("rvq_focus", float("nan"))))
+            parts.append(
+                "palette shift "
+                f"{_fmt_float(shift_rows[0].get('median'))} -> {_fmt_float(shift_rows[-1].get('median'))} "
+                "over rho sweep"
+            )
+    if not parts:
+        return "Pending: generate rvq_threshold_sweep.csv and rho_sweep.csv."
+    return "; ".join(parts) + "."
+
+
+def _claim_runtime_result(args: argparse.Namespace) -> str:
+    grain_rows = _read_csv(Path(args.grain_hop_csv))
+    palette_rows = _read_csv(Path(args.palette_scaling_csv))
+    chunk_rows = _read_csv(Path(args.chunk_parity_csv))
+    parts: list[str] = []
+    rtf_rows = [
+        r
+        for r in grain_rows
+        if str(r.get("metric", "")) == "end_to_end_rtf"
+        and str(r.get("codec_id", "")) == "dac"
+        and str(r.get("ablation_id", "")) == "beam_rvq_group"
+    ]
+    if rtf_rows:
+        best = min(rtf_rows, key=lambda r: _to_float(r.get("median", float("inf"))))
+        parts.append(
+            "best diagnostic RTF "
+            f"{_fmt_float(best.get('median'))} at unit/stride "
+            f"{best.get('unit')}/{best.get('stride')}"
+        )
+    scaling_rows = [
+        r
+        for r in palette_rows
+        if str(r.get("metric", "")) == "end_to_end_rtf"
+        and str(r.get("codec_id", "")) == "dac"
+    ]
+    if scaling_rows:
+        largest = max(scaling_rows, key=lambda r: _to_float(r.get("palette_count", float("nan"))))
+        parts.append(
+            "palette scaling reaches "
+            f"{_fmt_float(largest.get('palette_count'), 0)} clips at median RTF "
+            f"{_fmt_float(largest.get('median'))}"
+        )
+    if chunk_rows:
+        by_chunk: dict[float, dict[str, dict]] = {}
+        for row in chunk_rows:
+            chunk = _to_float(row.get("chunk_samples", float("nan")))
+            metric = str(row.get("metric", ""))
+            if math.isnan(chunk) or metric not in {"spectral_convergence", "log_spectral_distance"}:
+                continue
+            by_chunk.setdefault(chunk, {})[metric] = row
+        if by_chunk:
+            largest_chunk = max(by_chunk)
+            metrics = by_chunk[largest_chunk]
+            sc = metrics.get("spectral_convergence", {})
+            lsd = metrics.get("log_spectral_distance", {})
+            parts.append(
+                "chunk parity at "
+                f"{_fmt_float(largest_chunk, 0)} samples has SC "
+                f"{_fmt_float(sc.get('mean'))} and LSD {_fmt_float(lsd.get('mean'))}"
+            )
+    if not parts:
+        return "Pending: generate grain_hop_sweep.csv and palette_scaling.csv."
+    return "; ".join(parts) + "."
+
+
 def claim_table(args: argparse.Namespace) -> None:
     rows = [
         {
@@ -577,27 +762,27 @@ def claim_table(args: argparse.Namespace) -> None:
             "Experiment": "Sequence optimizer comparison",
             "Split": "test",
             "Metric": "J, transition cost, index jitter, file-switch rate",
-            "Result": "Fill from sequence_optimizer_comparison.csv",
+            "Result": _claim_sequence_result(args),
             "Limitation": "Bounded by retained Top-K candidates.",
         },
         {
             "Claim": "RVQ-group transfer exposes source-structure vs palette-detail control.",
             "Experiment": "RVQ threshold/band and rho sweeps",
-            "Split": "dev/test",
+            "Split": "test diagnostics",
             "Metric": "token change rates, source/onset metrics, palette distance",
-            "Result": "Fill from rvq_threshold_sweep.csv and rho_sweep.csv",
+            "Result": _claim_rvq_result(args),
             "Limitation": "Coarse gate claim depends on activation fraction.",
         },
         {
             "Claim": "The method is deployable under realistic palette/chunk/runtime constraints.",
             "Experiment": "Chunk/block parity and palette scaling",
             "Split": "test/runtime",
-            "Metric": "RTF, latency, RSS, parity SC/LSD, underruns",
-            "Result": "Fill from runtime_breakdown.tex and palette_scaling.csv",
+            "Metric": "RTF, latency, sequence runtime, parity SC/LSD",
+            "Result": _claim_runtime_result(args),
             "Limitation": "Hardware and backend dependent.",
         },
     ]
-    _write_latex_table(Path(args.output_tex), rows, ["Claim", "Experiment", "Split", "Metric", "Result", "Limitation"], "Claim-to-evidence map.", "tab:claim-evidence")
+    _write_claim_latex_table(Path(args.output_tex), rows)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -669,6 +854,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     claim_p = sub.add_parser("claim-table", help="Write manuscript claim-to-evidence table scaffold.")
     claim_p.add_argument("--output-tex", default="tables/claim_to_evidence.tex")
+    claim_p.add_argument("--main-csv", default="results/dac_main_full96.csv")
+    claim_p.add_argument("--sequence-csv", default="results/sequence_optimizer_comparison.csv")
+    claim_p.add_argument("--rvq-csv", default="results/rvq_threshold_sweep.csv")
+    claim_p.add_argument("--rho-csv", default="results/rho_sweep.csv")
+    claim_p.add_argument("--grain-hop-csv", default="results/grain_hop_sweep.csv")
+    claim_p.add_argument("--palette-scaling-csv", default="results/palette_scaling.csv")
+    claim_p.add_argument("--chunk-parity-csv", default="artifacts/paper/chunk_parity_beam_rvq_group/parity_curve.csv")
     claim_p.set_defaults(func=claim_table)
     return p
 

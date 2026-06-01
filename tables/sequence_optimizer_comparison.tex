@@ -1,0 +1,44 @@
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{llllllll}
+\toprule
+codec\_id & ablation\_id & metric & n & mean & median & ci95\_lo & ci95\_hi \\
+\midrule
+dac & beam\_rvq\_group & objective\_j & 96 & 778.8 & 778.5 & 775.6 & 782 \\
+dac & beam\_rvq\_group & emission\_cost & 96 & 338.3 & 338.3 & 338.3 & 338.4 \\
+dac & beam\_rvq\_group & transition\_cost & 96 & 473.6 & 472.8 & 470.1 & 477.1 \\
+dac & beam\_rvq\_group & weighted\_transition\_cost & 96 & 440.5 & 439.7 & 437.2 & 443.7 \\
+dac & beam\_rvq\_group & index\_jitter & 96 & 1.152e+04 & 1.113e+04 & 1.112e+04 & 1.193e+04 \\
+dac & beam\_rvq\_group & file\_switch\_rate & 96 & 0.3524 & 0.349 & 0.3423 & 0.3625 \\
+dac & beam\_rvq\_group & adjacent\_step\_rate & 96 & 0.5727 & 0.5777 & 0.5624 & 0.583 \\
+dac & beam\_rvq\_group & sequence\_runtime\_ms & 96 & 1737 & 1654 & 1671 & 1825 \\
+dac & greedy\_rvq\_group & objective\_j & 96 & 922.7 & 926 & 918.5 & 926.5 \\
+dac & greedy\_rvq\_group & emission\_cost & 96 & 338.2 & 338.2 & 338.1 & 338.3 \\
+dac & greedy\_rvq\_group & transition\_cost & 96 & 628.5 & 632.1 & 624 & 632.6 \\
+dac & greedy\_rvq\_group & weighted\_transition\_cost & 96 & 584.5 & 587.9 & 580.3 & 588.3 \\
+dac & greedy\_rvq\_group & index\_jitter & 96 & 2.466e+04 & 2.473e+04 & 2.42e+04 & 2.514e+04 \\
+dac & greedy\_rvq\_group & file\_switch\_rate & 96 & 0.781 & 0.7889 & 0.7673 & 0.7939 \\
+dac & greedy\_rvq\_group & adjacent\_step\_rate & 96 & 0.1489 & 0.1378 & 0.1372 & 0.1619 \\
+dac & greedy\_rvq\_group & sequence\_runtime\_ms & 96 & 2.498 & 2.245 & 2.252 & 2.82 \\
+dac & greedy\_smooth\_rvq\_group & objective\_j & 96 & 798.9 & 798.7 & 795.5 & 802.2 \\
+dac & greedy\_smooth\_rvq\_group & emission\_cost & 96 & 338.3 & 338.3 & 338.3 & 338.4 \\
+dac & greedy\_smooth\_rvq\_group & transition\_cost & 96 & 495.2 & 495 & 491.7 & 498.7 \\
+dac & greedy\_smooth\_rvq\_group & weighted\_transition\_cost & 96 & 460.5 & 460.3 & 457.3 & 463.8 \\
+dac & greedy\_smooth\_rvq\_group & index\_jitter & 96 & 1.347e+04 & 1.342e+04 & 1.306e+04 & 1.39e+04 \\
+dac & greedy\_smooth\_rvq\_group & file\_switch\_rate & 96 & 0.4087 & 0.4106 & 0.3985 & 0.4196 \\
+dac & greedy\_smooth\_rvq\_group & adjacent\_step\_rate & 96 & 0.5029 & 0.5015 & 0.4927 & 0.5135 \\
+dac & greedy\_smooth\_rvq\_group & sequence\_runtime\_ms & 96 & 145.1 & 134.3 & 140.6 & 149.6 \\
+dac & viterbi\_rvq\_group & objective\_j & 96 & 722.1 & 722.2 & 720.4 & 723.8 \\
+dac & viterbi\_rvq\_group & emission\_cost & 96 & 338.4 & 338.4 & 338.3 & 338.5 \\
+dac & viterbi\_rvq\_group & transition\_cost & 96 & 412.5 & 412.5 & 410.8 & 414.3 \\
+dac & viterbi\_rvq\_group & weighted\_transition\_cost & 96 & 383.6 & 383.7 & 382 & 385.3 \\
+dac & viterbi\_rvq\_group & index\_jitter & 96 & 6461 & 6352 & 6232 & 6695 \\
+dac & viterbi\_rvq\_group & file\_switch\_rate & 96 & 0.1935 & 0.1906 & 0.1886 & 0.1987 \\
+dac & viterbi\_rvq\_group & adjacent\_step\_rate & 96 & 0.7624 & 0.7639 & 0.7567 & 0.7683 \\
+dac & viterbi\_rvq\_group & sequence\_runtime\_ms & 96 & 1.283e+04 & 1.241e+04 & 1.234e+04 & 1.336e+04 \\
+\bottomrule
+\end{tabular}
+\caption{Sequence optimizer comparison.}
+\label{tab:sequence-optimizer}
+\end{table}

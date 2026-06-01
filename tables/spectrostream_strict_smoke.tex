@@ -1,0 +1,32 @@
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{llllllll}
+\toprule
+codec\_id & ablation\_id & metric & n & mean & median & ci95\_lo & ci95\_hi \\
+\midrule
+spectrostream & greedy\_rvq\_group & fad & 2 & 2.388 & 2.388 & 2.388 & 2.388 \\
+spectrostream & greedy\_rvq\_group & spectral\_convergence & 2 & 1.125 & 1.125 & 1.012 & 1.238 \\
+spectrostream & greedy\_rvq\_group & log\_spectral\_distance & 2 & 24 & 24 & 22.22 & 25.79 \\
+spectrostream & greedy\_rvq\_group & token\_discontinuity & 2 & 0.9866 & 0.9866 & 0.98 & 0.9932 \\
+spectrostream & greedy\_rvq\_group & envelope\_correlation & 2 & 0.9921 & 0.9921 & 0.9911 & 0.9932 \\
+spectrostream & greedy\_rvq\_group & index\_jitter & 2 & 9075 & 9075 & 9017 & 9133 \\
+spectrostream & greedy\_rvq\_group & source\_onset\_f1 & 2 & 0.9815 & 0.9815 & 0.963 & 1 \\
+spectrostream & greedy\_rvq\_group & output\_to\_nearest\_palette\_distance & 2 & 15.47 & 15.47 & 14.47 & 16.48 \\
+spectrostream & greedy\_rvq\_group & palette\_embedding\_shift & 2 & -2.586 & -2.586 & -4.118 & -1.054 \\
+spectrostream & greedy\_rvq\_group & end\_to\_end\_rtf & 2 & 2.265 & 2.265 & 1.006 & 3.524 \\
+spectrostream & beam\_rvq\_group & fad & 2 & 2.388 & 2.388 & 2.388 & 2.388 \\
+spectrostream & beam\_rvq\_group & spectral\_convergence & 2 & 1.099 & 1.099 & 1.009 & 1.189 \\
+spectrostream & beam\_rvq\_group & log\_spectral\_distance & 2 & 23.95 & 23.95 & 22.12 & 25.78 \\
+spectrostream & beam\_rvq\_group & token\_discontinuity & 2 & 0.9864 & 0.9864 & 0.98 & 0.9927 \\
+spectrostream & beam\_rvq\_group & envelope\_correlation & 2 & 0.992 & 0.992 & 0.9915 & 0.9925 \\
+spectrostream & beam\_rvq\_group & index\_jitter & 2 & 4065 & 4065 & 3683 & 4447 \\
+spectrostream & beam\_rvq\_group & source\_onset\_f1 & 2 & 0.9815 & 0.9815 & 0.963 & 1 \\
+spectrostream & beam\_rvq\_group & output\_to\_nearest\_palette\_distance & 2 & 15.51 & 15.51 & 14.5 & 16.53 \\
+spectrostream & beam\_rvq\_group & palette\_embedding\_shift & 2 & -2.532 & -2.532 & -3.971 & -1.093 \\
+spectrostream & beam\_rvq\_group & end\_to\_end\_rtf & 2 & 0.9439 & 0.9439 & 0.9361 & 0.9518 \\
+\bottomrule
+\end{tabular}
+\caption{Main 96-pair DAC objective evaluation.}
+\label{tab:dac-main-full96}
+\end{table}

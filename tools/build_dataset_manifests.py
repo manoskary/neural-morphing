@@ -310,7 +310,7 @@ def _format_pairs(pairs: list[tuple[dict, dict]], split: str, legacy_count: int,
     return rows
 
 
-def _write_eval_json(path: Path, palette_rows: list[dict], pair_rows: list[dict], seed: int) -> None:
+def _write_eval_json(path: Path, palette_rows: list[dict], pair_rows: list[dict], seed: int, notes: str | None = None) -> None:
     payload = {
         "seed": int(seed),
         "palette_train": [r["path"] for r in palette_rows],
@@ -325,7 +325,7 @@ def _write_eval_json(path: Path, palette_rows: list[dict], pair_rows: list[dict]
             }
             for r in pair_rows
         ],
-        "notes": "Generated from immutable CSV manifests by tools/build_dataset_manifests.py.",
+        "notes": notes or "Generated from immutable CSV manifests by tools/build_dataset_manifests.py.",
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -356,7 +356,7 @@ def build_manifests(args: argparse.Namespace) -> None:
     out_dir = Path(args.out_dir)
     metadata = _read_metadata(args.metadata_csv)
     allowed = {x.strip() for x in str(args.allowed_licenses).split(",") if x.strip()}
-    license_filter = "commercial-compatible-derivatives: " + ",".join(sorted(allowed))
+    license_filter = "exact-allowed-licenses: " + ",".join(sorted(allowed))
     existing_ids: set[str] = set()
 
     palette_rows = _scan_split(
@@ -405,6 +405,23 @@ def build_manifests(args: argparse.Namespace) -> None:
     _write_csv(out_dir / "eval_pairs_test.csv", test_pairs, PAIR_FIELDS)
     _write_eval_json(out_dir / "eval_manifest_dev.json", palette_rows, dev_pairs, int(args.seed))
     _write_eval_json(out_dir / "eval_manifest_test.json", palette_rows, test_pairs, int(args.seed))
+    diagnostic_pairs = []
+    if int(args.diagnostic_pairs) > 0:
+        diagnostic_count = min(int(args.diagnostic_pairs), len(test_pairs))
+        diagnostic_split = f"diagnostic{diagnostic_count}_from_test"
+        diagnostic_pairs = [{**row, "split": diagnostic_split} for row in test_pairs[:diagnostic_count]]
+        _write_csv(out_dir / f"eval_pairs_diagnostic{diagnostic_count}.csv", diagnostic_pairs, PAIR_FIELDS)
+        _write_eval_json(
+            out_dir / f"eval_manifest_diagnostic{diagnostic_count}.json",
+            palette_rows,
+            diagnostic_pairs,
+            int(args.seed),
+            notes=(
+                f"Bounded diagnostic subset derived from the first {diagnostic_count} pairs of "
+                "eval_manifest_test.json because no disjoint dev pairs remain when all available "
+                "pairs are assigned to the main test manifest."
+            ),
+        )
 
     summary = _summary(
         {
@@ -413,6 +430,7 @@ def build_manifests(args: argparse.Namespace) -> None:
             "reference_lofi_drums": ref_rows,
             "eval_pairs_dev": dev_pairs,
             "eval_pairs_test": test_pairs,
+            **({f"eval_pairs_diagnostic{len(diagnostic_pairs)}": diagnostic_pairs} if diagnostic_pairs else {}),
         },
         allowed,
     )
@@ -437,6 +455,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--allowed-licenses", default=",".join(DEFAULT_ALLOWED_LICENSES))
     p.add_argument("--dev-pairs", type=int, default=24)
     p.add_argument("--test-pairs", type=int, default=96, help="Use 0 to keep all non-dev pairs.")
+    p.add_argument("--diagnostic-pairs", type=int, default=0, help="Optional diagnostic subset size copied from the fixed test order.")
     p.add_argument("--legacy-count", type=int, default=32)
     p.add_argument("--seed", type=int, default=1234)
     p.add_argument("--skip-tempo", action="store_true", help="Skip librosa tempo estimation.")

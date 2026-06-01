@@ -1,0 +1,43 @@
+{
+  "generated_at_utc": "2026-05-29T15:20:18.354942+00:00",
+  "allowed_license_filter": [
+    "CC-BY-3.0",
+    "CC-BY-4.0",
+    "CC-BY-SA-3.0",
+    "CC-BY-SA-4.0",
+    "CC0-1.0"
+  ],
+  "counts": {
+    "palette_freesound": 247,
+    "source_lofi_drums": 96,
+    "reference_lofi_drums": 96,
+    "eval_pairs_dev": 0,
+    "eval_pairs_test": 96,
+    "eval_pairs_diagnostic24": 24
+  },
+  "missing_required_metadata": {
+    "palette_freesound": {
+      "license": 0,
+      "source_ref": 0
+    },
+    "source_lofi_drums": {
+      "license": 0,
+      "source_ref": 0
+    },
+    "reference_lofi_drums": {
+      "license": 0,
+      "source_ref": 0
+    },
+    "eval_pairs_dev": {},
+    "eval_pairs_test": {},
+    "eval_pairs_diagnostic24": {}
+  },
+  "license_filter_failures": {
+    "palette_freesound": 0,
+    "source_lofi_drums": 0,
+    "reference_lofi_drums": 0,
+    "eval_pairs_dev": 0,
+    "eval_pairs_test": 0,
+    "eval_pairs_diagnostic24": 0
+  }
+}
