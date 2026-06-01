@@ -1,0 +1,775 @@
+% Template LaTeX file for DAFx-26 papers
+%
+% To generate the correct references using BibTeX, run
+%     latex, bibtex, latex, latex
+% modified...
+% - from DAFx-00 to DAFx-02 by Florian Keiler, 2002-07-08
+% - from DAFx-03 to DAFx-04 by Gianpaolo Evangelista, 2004-02-07 
+% - from DAFx-05 to DAFx-06 by Vincent Verfaille, 2006-02-05
+% - from DAFx-06 to DAFx-07 by Vincent Verfaille, 2007-01-05
+%                          and Sylvain Marchand, 2007-01-31
+% - from DAFx-07 to DAFx-08 by Henri Penttinen, 2007-12-12
+%                          and Jyri Pakarinen 2008-01-28
+% - from DAFx-08 to DAFx-09 by Giorgio Prandi, Fabio Antonacci 2008-10-03
+% - from DAFx-09 to DAFx-10 by Hannes Pomberger 2010-02-01
+% - from DAFx-10 to DAFx-12 by Jez Wells 2011
+% - from DAFx-12 to DAFx-14 by Sascha Disch 2013
+% - from DAFx-15 to DAFx-16 by Pavel Rajmic 2015
+% - from DAFx-16 to DAFx-17 by Brian Hamilton 2016
+% - from DAFx-17 to DAFx-18 by Annibal Ferreira and Matthew Davies 2017
+% - from DAFx-18 to DAFx-19 by Dave Moffat 2019
+% - from DAFx-19 to DAFx-20-21-22 by Gianpaolo Evangelista 2019-21
+% - from DAFx-20-21-22 to DAFx-23 by Federico Fontana 2022-11-25
+% - from DAFx-23 to DAFx-24 by Matteo Scerbo 2023-10-05
+% - from DAFx-24 to DAFx-25 by Leonardo Gabrielli 2024-12-13
+% - from DAFx-25 to DAFx-26 by Kurt James Werner, Elliot K. Canfield-Dafilou, Champ Darabundit 2026-01-20
+%
+% Template with hyper-references (links) active after conversion to pdf
+% (with the distiller) or if compiled with pdflatex.
+%
+% 20060205: added package 'hypcap' to correct hyperlinks to figures and tables
+%                      use of \papertitle and \paperauthorA, etc for same title in PDF and Metadata
+% 20190205: Package 'hypcap' removed, and replaced with 'caption', to allow for the inclusion
+%		       of a CC UP licence.
+% 20221125: Package 'nimbusserif' commented. PDF test template generated with
+%                      pdfTeX 3.14159265-2.6-1.40.20 (TeX Live 2019/Debian) kpathsea version 6.3.1
+%
+% 1) Please compile using latex or pdflatex.
+% 2) If using pdflatex, you need your figures in a file format other than eps! e.g. png or jpg is working
+% 3) Please use "paperftitle" and "pdfauthor" definitions below
+
+%------------------------------------------------------------------------------------------
+%  !  !  !  !  !  !  !  !  !  !  !  ! user defined variables  !  !  !  !  !  !  !  !  !  !  !  !  !  !
+% Please use the following commands to define title and author(s) of the paper.
+% paperauthorA MUST be the the first author of the paper
+% Please comment the unused definitions 
+\def\papertitle{Neural Morphing: Sequence-Optimized Token-Level \\ Morphing in Neural Audio Codecs}
+\def\paperauthorA{Author One}
+\def\paperauthorB{Author Two}
+\def\paperauthorC{Author Three}
+\def\paperauthorD{Author Four}
+%\def\paperauthorE{Author Five}
+%\def\paperauthorF{Author Six}
+%\def\paperauthorG{Author Seven}
+%\def\paperauthorH{Author Eight}
+%\def\paperauthorI{Author Nine}
+%\def\paperauthorJ{Author Ten}
+
+% Authors' affiliations have to be set below
+% Please remember to anonymize papers for reviews!
+%------------------------------------------------------------------------------------------
+\documentclass[twoside,a4paper]{article}
+\usepackage{etoolbox}
+
+% For blind reviews: \usepackage[blind]{dafx26v3}
+% For final submission: \usepackage[print]{dafx26v3}
+%------------------------------------------------------------------------------------------
+\usepackage[blind]{dafx26v3}
+
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{siunitx}
+\usepackage{euscript}
+%\usepackage[latin1]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+%\usepackage[T1]{fontenc}
+%\usepackage{lmodern}
+%\usepackage{nimbusserif}
+\usepackage{ifpdf}
+\usepackage[english]{babel}
+\usepackage{caption}
+\usepackage{subfig} % or can use subcaption package
+\usepackage{color}
+\usepackage{booktabs}
+\usepackage{lipsum}
+\usepackage{microtype}
+
+
+\input glyphtounicode
+\pdfgentounicode=1
+
+\setcounter{page}{1}
+\ninept
+
+% build the list of authors and set the flag \multipleauth to handle the et al. in the copyright note (in DAFx_24.sty)
+%==============================DO NOT MODIFY =======================================
+\newcounter{numauth}\setcounter{numauth}{1}
+\newcounter{listcnt}\setcounter{listcnt}{1}
+\newcommand\authcnt[1]{\ifdefined#1 \stepcounter{numauth} \fi}
+
+\newcommand\addauth[1]{
+\ifdefined#1 
+\stepcounter{listcnt}
+\ifnum \value{listcnt}<\value{numauth}
+\appto\authorslist{, #1}
+\else
+\appto\authorslist{~and~#1}
+\fi
+\fi}
+%======DO NOT MODIFY UNLESS YOUR PAPER HAS MORE THAN 10 AUTHORS========================
+%==we count the authors defined at the beginning of the file (paperauthorA is mandatory and already accounted for)
+\authcnt{\paperauthorB}
+\authcnt{\paperauthorC}
+\authcnt{\paperauthorD}
+\authcnt{\paperauthorE}
+\authcnt{\paperauthorF}
+\authcnt{\paperauthorG}
+\authcnt{\paperauthorH}
+\authcnt{\paperauthorI}
+\authcnt{\paperauthorJ}
+%==we create a list of authors for pdf tagging, for example: paperauthorA, paperauthorB, ... and paperauthorF (last author)
+\def\authorslist{\paperauthorA}
+\addauth{\paperauthorB}
+\addauth{\paperauthorC}
+\addauth{\paperauthorD}
+\addauth{\paperauthorE}
+\addauth{\paperauthorF}
+\addauth{\paperauthorG}
+\addauth{\paperauthorH}
+\addauth{\paperauthorI}
+\addauth{\paperauthorJ}
+%====================================================================================
+
+\usepackage{times}
+% Saves a lot of ouptut space in PDF... after conversion with the distiller
+% Delete if you cannot get PS fonts working on your system.
+
+
+% pdf-tex settings: detect automatically if run by latex or pdflatex
+\newif\ifpdf
+\ifx\pdfoutput\relax
+\else
+   \ifcase\pdfoutput
+      \pdffalse
+   \else
+      \pdftrue
+   \fi
+\fi
+
+\ifpdf % compiling with pdflatex
+  \usepackage[pdftex,
+    pdftitle={\papertitle},
+    pdfauthor={\authorslist},
+    pdfsubject={Proceedings of the 29th International Conference on Digital Audio Effects (DAFx26)},
+    colorlinks=false, % links are activated as color boxes instead of color text
+    bookmarksnumbered, % use section numbers with bookmarks
+    pdfstartview=XYZ % start with zoom=100% instead of full screen; especially useful if working with a big screen :-)
+  ]{hyperref}
+  \pdfcompresslevel=9
+  \usepackage[pdftex]{graphicx}
+ % \usepackage[figure,table]{hypcap}
+\else % compiling with latex
+  \usepackage[dvips]{epsfig,graphicx}
+  \usepackage[dvips,
+    pdftitle={\papertitle},
+    pdfauthor={\authorslist},
+    pdfsubject={Proceedings of the 29th International Conference on Digital Audio Effects (DAFx26)},
+    colorlinks=false, % no color links
+    bookmarksnumbered, % use section numbers with bookmarks
+    pdfstartview=XYZ % start with zoom=100% instead of full screen
+  ]{hyperref}
+  % hyperrefs are active in the pdf file after conversion
+  %\usepackage[figure,table]{hypcap}
+\fi
+\usepackage[hypcap=true]{caption}
+\title{\papertitle}
+
+%-------------SINGLE-AFFILIATION SINGLE-AUTHOR HEADER STARTS (uncomment below if your paper has a single author)----------------------------------------
+\affiliation
+{\paperauthorA\,\sthanks{Thanks to the predecessors for the templates}}
+{\href{https://dafx26.mit.edu}{Dept. of Electrical Engineering and Computer Science} \\ Massachusetts Institute of Technology \\ Cambridge, USA\\
+{\tt \href{mailto:dafx2026@gmail.com}{dafx2026@gmail.com}}
+}
+%-------------SINGLE-AFFILIATION SINGLE-AUTHOR HEADER ENDS-------------------------------------------------------------------------------------------------------------------
+
+%------------SINGLE-AFFILIATION MULTIPLE-AUTHORS HEADER STARTS (uncomment below if your paper has two or more authors from the same institution)
+% \affiliation
+% {\paperauthorA\ and \paperauthorB\,\sthanks{Thanks to the predecessors for the templates}}
+% {\href{https://dafx26.mit.edu}{Dept. of Electrical Engineering and Computer Science} \\ Massachusetts Institute of Technology \\ Cambridge, USA\\
+% {\tt \href{mailto:dafx2026@gmail.com}{dafx2026@gmail.com}}
+% }
+%-----------------------------------SINGLE-AFFILIATION-MULTIPLE-AUTHORS HEADER ENDS----------------------------------------------------------------------------------------
+
+%---------------TWO-AFFILIATIONS HEADER STARTS (uncomment below if your paper has two authors, each from a different institution)-----------------------------
+% \twoaffiliations
+% {\paperauthorA \,\sthanks{Thanks to the predecessors for the templates}}
+% {\href{https://dafx26.mit.edu}{Dept. of Electrical Engineering and Computer Science} \\ Massachusetts Institute of Technology \\ Cambridge, USA\\
+% {\tt \href{mailto:dafx2026@gmail.com}{dafx2026@gmail.com}}
+% }
+% {\paperauthorB \,\sthanks{This work was supported by the XYZ Foundation}}
+% {\href{https://dafx26.mit.edu}{Dept. of Information Engineering} \\ Universit\`a Politecnica delle Marche \\ Ancona, IT\\
+% {\tt \href{mailto:dafx25@dii.univpm.it}{dafx25@dii.univpm.it}}
+% }
+%-------------------------------------TWO-AFFILIATIONS HEADER ENDS------------------------------------------------------
+
+%%---------------THREE-AFFILIATIONS HEADER STARTS (uncomment below if your paper has three authors, each from a different institution)-----------------------
+% \threeaffiliations
+% {\paperauthorA \,\sthanks{Thanks to the predecessors for the templates}}
+% {\href{https://dafx26.mit.edu}{Dept. of Electrical Engineering and Computer Science} \\ Massachusetts Institute of Technology \\ Cambridge, USA\\
+% {\tt \href{mailto:dafx2026@gmail.com}{dafx2026@gmail.com}}
+% }
+% {\paperauthorB \,\sthanks{Illustrious collaborator}}
+% {\href{https://dafx26.mit.edu}{Dept. of Information Engineering} \\ Universit\`a Politecnica delle Marche \\ Ancona, IT\\
+% {\tt \href{mailto:dafx25@dii.univpm.it}{dafx25@dii.univpm.it}}
+% }
+% {\paperauthorC \,\sthanks{This work was supported by the XYZ Foundation}}
+% {\href{https://dafx24.surrey.ac.uk}{Institute of Sound Recording} \\ University of Surrey\\ Guildford, UK\\
+% {\tt \href{mailto:dafx24@surrey.ac.uk}{dafx24@surrey.ac.uk}}
+% }
+%-------------------------------------THREE-AFFILIATIONS HEADER ENDS------------------------------------------------------
+
+%----------------FOUR-AFFILIATIONS HEADER STARTS (uncomment below if your paper has four authors, each from a different institution)-----------------------
+% \fouraffiliations
+% {\paperauthorA}
+% {\href{https://dafx26.mit.edu}{Dept. of Electrical Engineering and Computer Science} \\ Massachusetts Institute of Technology \\ Cambridge, USA\\
+% {\tt \href{mailto:dafx2026@gmail.com}{dafx2026@gmail.com}}
+% }
+% {\paperauthorB}
+% {\href{https://dafx26.mit.edu}{Dept. of Information Engineering} \\ Universit\`a Politecnica delle Marche \\ Ancona, IT\\
+% {\tt \href{mailto:dafx25@dii.univpm.it}{dafx25@dii.univpm.it}}
+% }
+% {\paperauthorC}
+% {\href{https://dafx24.surrey.ac.uk}{Institute of Sound Recording} \\ University of Surrey\\ Guildford, UK\\
+% {\tt \href{mailto:dafx24@surrey.ac.uk}{dafx24@surrey.ac.uk}}
+% }
+% {\paperauthorD}
+% {\href{https://dafx23.create.aau.dk/}{Multisensory Experience Lab} \\ Aalborg University \\ Copenhagen, Denmark \\
+% {\tt \href{mailto:dafx2023@gmail.com}{dafx2023@gmail.com}}
+% }
+
+
+%-------------------------------------FOUR-AFFILIATIONS HEADER ENDS------------------------------------------------------
+
+\begin{document}
+% more pdf-tex settings:
+\ifpdf % used graphic file format for pdflatex
+  \DeclareGraphicsExtensions{.png,.jpg,.pdf}
+\else  % used graphic file format for latex
+  \DeclareGraphicsExtensions{.eps}
+\fi
+
+%\makeatletter
+%\pdfbookmark[0]{\@pdftitle}{title}
+%\makeatother
+
+\maketitle
+
+\begin{abstract}
+Neural audio codecs provide discrete latent representations that can be edited and decoded without training a new generative model, but palette-based token replacement must control both temporal continuity and the amount of source structure retained. This paper presents \emph{Neural Morphing}, a token-domain palette-based audio effect that selects residual-vector-quantized (RVQ) token grains from a target palette and decodes the edited stream through a pretrained codec. The method combines two components: an RVQ-group transfer policy that separates coarse, middle, and fine codebook groups, and a continuity-constrained sequence matcher that replaces independent greedy selection with bounded beam search over retained palette candidates. We evaluate the method primarily with DAC on a deterministic 96-pair Lo-Fi Drums benchmark and a strictly licensed 247-clip Freesound palette. Beam search reduces palette-index jitter from 24.66k to 11.52k in the main RVQ-group condition, while exact Viterbi over the same retained candidates gives a lower-jitter but slower diagnostic upper bound. RVQ-group transfer changes token discontinuity, source-envelope preservation, and palette-distance metrics in a measurable structure-versus-detail trade-off; the default DAC threshold is conservative and mainly activates middle/fine transfer on the tested material. Chunked rendering, palette-size scaling, system-health checks, and a bounded SpectroStream smoke test characterize deployability under realistic runtime constraints. The claims are intentionally limited to objective, diagnostic, and deployment-oriented evidence for percussive sound-design use; no formal listening test is claimed.
+\end{abstract}
+
+\section{Introduction}\label{sec:intro}
+
+Creative audio effects often transform a source toward a target sound while preserving enough timing and gesture for the result to remain musically usable. Classical audio morphing usually frames this problem as interpolation in a spectral or parametric representation, while audio mosaicing frames it as selection and assembly of short waveform units from a corpus. This paper studies a related but distinct setting: token-domain palette-based morphing, where the source and palette are encoded into neural-codec tokens, selected palette token grains replace parts of the source representation, and a pretrained codec decoder reconstructs the waveform.
+
+Neural-codec tokens make this setting attractive because they combine compact discrete structure with a high-quality learned decoder. They also make the problem technically different from descriptor-based mosaicing. The matching descriptor is induced by codec embeddings and token statistics rather than by hand-designed features such as MFCCs or spectral centroid, and the synthesis stage is neural decoding rather than waveform overlap-add. As a result, the method inherits the sequence-selection problem of mosaicing but must solve it in a learned discrete representation whose perceptual axes are only partly interpretable.
+
+Two failure modes dominate naive token-domain palette morphing. First, independent nearest-neighbor matching can switch rapidly among unrelated palette grains, causing unstable palette trajectories and audible chattering. Second, replacing all RVQ layers uniformly obscures which part of the representation is being transferred: source rhythm, coarse acoustic envelope, residual timbral detail, and decoder-facing token smoothness are coupled into one opaque operation. These are not only sound-quality problems. A DAW-oriented effect must also run under bounded palette size, chunk size, host block size, and backend health constraints.
+
+This paper presents \emph{Neural Morphing}, a codec-based VST3/AU effect and reference evaluation pipeline for this setting. The method is intentionally training-free: it uses an existing neural codec encoder/decoder, indexes a fixed target palette, performs sequence-aware token-grain matching, and applies an RVQ-group transfer policy before decoding. Anonymous code and build material are provided as companion material~\footnote{\url{https://anonymo.us/neural-morphing-code}.}, and anonymous audio examples/demos are provided separately~\footnote{\url{https://anonymo.us/neural-morphing-demo}.}. The contributions are:
+
+\begin{itemize}
+    \item an RVQ-group transfer policy that decomposes codec layers into coarse, middle, and fine groups, exposing a measurable source-structure versus palette-detail control surface;
+    \item a continuity-constrained sequence objective for palette-grain selection, with greedy, smoothed greedy, bounded beam, and exact Viterbi comparisons over the same retained candidate lists;
+    \item a deployment-oriented evaluation package covering strict dataset manifests, runtime/system-health checks, chunked realtime-proxy parity, palette scaling, and bounded native-RVQ portability.
+\end{itemize}
+
+The evaluation is designed to support only the claims that the current evidence can bear. DAC~\cite{Kumar:2023:DAC} is the main native-RVQ backend and is evaluated on 96 deterministic Lo-Fi Drums source/reference pairs against a strictly licensed 247-clip Freesound palette. Beam search is tested as a bounded runtime/quality compromise rather than as an unconstrained optimum; exact Viterbi over retained Top-$K$ candidates is reported as a diagnostic reference. SpectroStream is reported as a small native-RVQ portability check, while CoDiCodec-style non-RVQ adapters are separated from the RVQ evidence chain. The strongest claim is therefore not that Neural Morphing solves general audio morphing, but that sequence optimization, RVQ-group transfer, and bounded deployment diagnostics make codec-token palette morphing practical and measurable for percussive sound-design material.
+
+
+\section{Related Work}
+
+\subsection{Audio Morphing and Cross-Synthesis}
+
+Audio morphing has been explored through spectral interpolation, phase-vocoder techniques, and cross-synthesis methods that combine magnitude and phase information across signals \cite{Serra:1990:SpectralInterpolation}. These approaches operate in time-frequency representations and provide continuous control over spectral envelopes and fine structure. While effective for stationary or quasi-stationary material, they can suffer from phase inconsistencies and temporal smearing when applied to strongly transient or rhythmically complex signals.
+
+Parametric morphing methods based on sinusoidal or source-filter models provide more structured control but require explicit analysis and parameter estimation. Such models can be brittle under noisy or polyphonic conditions and may impose assumptions that limit generality. The present work is related to this family only at the level of artistic intent: the goal is a perceptible transformation between source and target character, not transparent reconstruction or interpolation in an STFT/vocoder parameter space.
+
+\subsection{Concatenative Synthesis and Audio Mosaicing}
+
+Concatenative synthesis and audio mosaicing select short segments from a database based on feature similarity to a target \cite{Schwarz:2000:DataDrivenConcatenative,Schwarz:2003:CATERPILLAR,Zils:2001:MusicalMosaicing,Schwarz:2006:CataRT,Schwarz:2006:Concatenative,Driedger:2015:LetItBee}. Early data-driven systems such as CATERPILLAR formalized unit-selection synthesis over large corpora and emphasized sequence-aware selection costs, while later CataRT work demonstrated interactive descriptor-space navigation for real-time corpus-based resynthesis \cite{Schwarz:2003:CATERPILLAR,Schwarz:2006:CataRT,Schwarz:2004:PhD}. Classical systems compute hand-crafted descriptors such as MFCCs, spectral centroid, pitch, or loudness, and assemble output via waveform-domain concatenation or overlap-add reconstruction. Sequence optimization techniques, including dynamic programming and Viterbi decoding, are commonly used to encourage temporal coherence by penalizing discontinuous transitions between database segments \cite{Schwarz:2004:PhD,Schwarz:2006:CorpusBased}, highlighting that segment selection is inherently a sequence optimization problem rather than a set of independent frame-wise decisions.
+
+These methods establish the conceptual foundation for palette-based morphing, but the terminology is only partially transferable. In this work, token sequences replace waveform segments and neural decoding replaces overlap-add reconstruction. The descriptor is not a manually specified timbre descriptor; it is computed from learned codec codebook embeddings or token statistics. This reduces reliance on explicit descriptor engineering, but it also makes the perceptual meaning of the descriptor less transparent. We therefore describe the method as token-domain palette-based morphing with mosaicing-like selection, rather than as a conventional audio mosaicing system.
+
+\subsection{Neural Audio Codecs and Discrete Token Representations}
+
+Neural audio codecs based on vector quantization learn discrete token representations that can be decoded into high-quality waveforms. Representative systems include EnCodec \cite{Defossez:2022:EnCodec}, DAC \cite{Kumar:2023:DAC}, SpectroStream \cite{Li:2025:SpectroStream}, and CoDiCodec \cite{Pasini:2025:CoDiCodec}. SpectroStream is also used in recent live music models \cite{Caillon:2025:LiveMusicModels}. In RVQ codecs, the encoder first produces a continuous latent representation. A first codebook approximates that representation, a second codebook quantizes the residual error, and subsequent codebooks continue this residual refinement. The transmitted or edited representation is therefore a time sequence of code indices with several quantizer layers per frame. The decoder maps this stack of indices back to waveform audio.
+
+This residual stack is useful for control because it creates an approximate hierarchy: early layers tend to carry broader acoustic structure, while later layers carry residual detail. The hierarchy is learned rather than hand-labeled, so its interpretation must be treated empirically. Still, because tokens correspond to learned acoustic patterns with temporal consistency, local token substitutions can produce perceptually meaningful transformations when sequence continuity is preserved. This makes discrete token streams a natural substrate for audio transformation, provided that operations respect both temporal dependencies and representation hierarchy.
+
+\subsection{Latent Manipulation and Training-Free Transformation}
+
+Several recent approaches explore training-free or low-training transformations by recombining latent or token segments from neural encoders and reconstructing them via pretrained decoders \cite{baas2023voice,tokui2025latent}. In these systems, matching is typically performed in latent or embedding space using nearest-neighbor search \cite{baas2023voice,tokui2025latent}. While this avoids retraining and leverages pretrained generative capacity, selection is often greedy and local, failing to account for the sequence-level nature of perceptual coherence.
+
+In parallel, discrete-token neural audio models show that tokenized representations can preserve long-range structure and high-fidelity reconstruction \cite{vanDenOord:2017:VQVAE,Dhariwal:2020:Jukebox,Borsos:2022:AudioLM,Agostinelli:2023:MusicLM}. In discrete token spaces, local replacement decisions can introduce abrupt representational changes that cannot be smoothed by interpolation, and may propagate through the decoder as audible artifacts. Sequence-aware optimization is therefore critical when operating in discrete representations.
+
+
+\begin{figure*}[ht]
+    \centering
+    \scriptsize
+    \setlength{\tabcolsep}{4pt}
+    \begin{tabular}{c c c c c}
+    Source audio & $\rightarrow$ & codec tokens & $\rightarrow$ & source token grains \\
+    Palette audio & $\rightarrow$ & cached palette tokens & $\rightarrow$ & palette token grains \\
+    \multicolumn{5}{c}{$\downarrow$} \\
+    \multicolumn{5}{c}{RVQ-band descriptors $\rightarrow$ Top-$K$ candidates $\rightarrow$ beam/Viterbi path search} \\
+    \multicolumn{5}{c}{$\downarrow$} \\
+    \multicolumn{5}{c}{RVQ-group swap (coarse gate, middle copy, fine vote) $\rightarrow$ codec decoder $\rightarrow$ morphed audio} \\
+    \end{tabular}
+    \caption{Overview of the proposed token-domain palette-based audio transformation method. Source and palette audio are encoded into neural codec token grains, represented by RVQ-derived descriptors, and matched to obtain Top-$K$ palette candidates at each source position. A bounded beam search performs sequence-aware unit selection, producing smoother and more globally consistent replacement paths than independent frame- or grain-wise matching. The resulting palette tokens are combined with the source stream through an RVQ-group swap, enabling controllable transfer of structure and detail before decoding.}
+    \label{fig:pipeline}
+\end{figure*}
+
+\subsection{Positioning of the Present Work}
+
+This work unifies three previously disconnected threads: concatenative sequence optimization, neural discrete representations, and deployable audio effects under real-time constraints. We treat RVQ token streams as a structured, learned unit domain. This is close enough to concatenative synthesis to inherit the sequence-selection problem, but different enough that the selected units are codec tokens rather than waveform grains with hand-designed descriptors. The method is therefore best understood as token-domain palette-based morphing. It introduces two design principles tailored to codec-based transformation:
+
+\begin{enumerate}
+    \item \textbf{RVQ-structured controllability:} By partitioning quantizer layers into coarse, middle, and fine groups, we expose an interpretable control dimension aligned with the residual hierarchy of the codec.
+    \item \textbf{Continuity-constrained selection:} By optimizing a sequence objective with explicit transition penalties via bounded beam search, we reduce temporal chattering while maintaining bounded compute suitable for plugin deployment.
+\end{enumerate}
+
+To our knowledge, the combination of band-aware RVQ token replacement and bounded beam-search sequence optimization has not been systematically evaluated in a deployable codec-based audio effect. The present work therefore connects neural discrete representations, mosaicing-like palette selection, and practical DAW-oriented runtime constraints without claiming to replace the full literature on either classical morphing or descriptor-based audio mosaicing.
+
+\subsection{Perceptual Goal and Use Cases}
+
+The intended perceptual result is a controlled hybrid rather than a transparent reconstruction. The source should retain usable temporal organization, especially onset timing and rhythmic envelope, while the palette contributes timbral color, residual detail, and local acoustic character. This makes the effect most natural for drum loops, percussion, found-sound rhythm beds, and production workflows where a user wants to push an existing groove toward a collection of target sounds without manually editing individual hits.
+
+In a DAW, the primary workflow is render-time or constrained realtime sound design. A user loads a palette, adjusts the structure/detail balance, continuity, and dry/wet amount, and auditions hybrids between the incoming source and the target collection. The method is therefore evaluated as a creative audio effect: the desired outcome is a musically useful continuum between source structure and palette character, not strict recovery of a known target waveform.
+
+
+\section{Methodology}\label{sec:method}
+
+\subsection{Neural Codec Representation}
+
+We assume a neural audio codec with an encoder $E(\cdot)$ and decoder $D(\cdot)$. The encoder maps waveform audio $x(t)$ to a lower-rate sequence of latent frames. In an RVQ codec, each frame is quantized by a stack of codebooks: the first codebook approximates the frame, and later codebooks encode residual information left by the previous codebooks. The resulting discrete representation is
+\begin{equation}
+    \mathbf{Z} = \{ \mathbf{z}_n \}_{n=1}^{N}, \quad \mathbf{z}_n = (z_{n,1}, \dots, z_{n,L}),
+\end{equation}
+where $n$ indexes time frames and $L$ is the number of residual quantizer layers. Each $z_{n,\ell}$ is a discrete codebook index from layer $\ell$. The decoder reconstructs waveform audio as $\hat{x}(t) = D(\mathbf{Z})$.
+
+The main paper experiment instantiates this framework with DAC at 44.1~kHz mono using 9 RVQ codebooks and approximately 87 token frames per second. DAC is used as a concrete codec backend, not as assumed prior knowledge: the method requires only an encoder, decoder, token layout, and a way to derive token-space descriptors. The portability appendix evaluates SpectroStream as a second native-RVQ backend. CoDiCodec is not used as native-RVQ evidence because its current integration exposes grouped latent slots rather than DAC-style multi-codebook RVQ layers. Across all runs, we operate directly on token frames rather than on decoded spectral features. Let $\mathbf{Z}^{(s)}$ denote the source token sequence and $\mathbf{Z}^{(p,k)}$ the $k$th palette grain.
+
+\subsection{Grain Extraction and Descriptor Space}
+
+Both source and palette recordings are segmented into fixed-length grains of $G$ token frames with hop size $H$. The tuned DAC setting uses $G=7$ and $H=2$, while portability back-ends use codec-specific settings (for SpectroStream, $G=2$ and $H=2$). Each palette grain stores its token tensor, its originating file index, and its frame index within that file. Overlapping output grains are merged in token space by deterministic overwrite in increasing grain-start order; later grains replace earlier tokens in the overlap, and no waveform-domain overlap-add is applied. This is the part of the method that is most directly related to audio mosaicing: a source grain is matched against a palette of candidate units. The difference is that candidate units are codec-token grains, not waveform grains.
+
+For each grain we compute a token-space descriptor by averaging the embedding vectors selected by each codebook over the grain duration and concatenating the resulting codebook-wise means. When explicit codebook embeddings are unavailable, we fall back to codebook-wise token means. The concatenated descriptor is $\ell_2$-normalized and used both as the full latent descriptor and as the source of three band-specific descriptors. These descriptors should not be read as hand-crafted timbre descriptors; they are codec-induced features used for matching in the learned token space.
+
+The RVQ stack is partitioned into three contiguous groups: coarse, middle, and fine. For a codec with $Q$ codebooks, the implementation sets $q_0=\max(1,\lfloor Q/3\rfloor)$ and $q_1=\min(Q,\max(q_0+1,\lfloor 2Q/3\rfloor))$, yielding groups $\{0,\ldots,q_0-1\}$, $\{q_0,\ldots,q_1-1\}$, and $\{q_1,\ldots,Q-1\}$. For DAC's $Q=9$ codebooks, this gives the one-indexed bands 1--3, 4--6, and 7--9. Distances are computed separately for each group using cosine distance in the descriptor space. A user parameter $\rho \in [0,1]$ controls the weighting between coarse and fine groups:
+\begin{equation}
+\tilde{w}_c = 1-\rho,\quad \tilde{w}_f = \rho,\quad \tilde{w}_m = \frac{\tilde{w}_c+\tilde{w}_f}{2},\quad
+w_g = \frac{\tilde{w}_g}{\sum_{h\in\{c,m,f\}}\tilde{w}_h}.
+\end{equation}
+The per-grain emission cost is therefore
+\begin{equation}
+e(i \mid n) = \sum_{g \in \{c,m,f\}} w_g(\rho)\, d_g\!\left(\mathbf{Z}^{(s)}_n,\mathbf{Z}^{(p,i)}\right),
+\end{equation}
+where $i$ indexes palette grains and $d_g$ is cosine distance for RVQ group $g$.
+
+At runtime, only the top $K=96$ palette grains under $e(i \mid n)$ are retained as candidates for each source grain. The DAC evaluation uses $\rho=0.30$, which favors the coarse and middle groups while still allowing residual-detail transfer.
+
+\subsection{RVQ-Aware Group Swapping}
+
+We evaluate two swap policies.
+
+\noindent \textbf{Full-layer swap.} All codebooks in the selected grain are replaced by the best palette candidate unless the candidate emission exceeds a threshold $\theta$, in which case the source grain is left unchanged. This threshold acts as a conservative fallback against implausible matches.
+
+\noindent \textbf{RVQ-group swap.} The three RVQ bands are treated asymmetrically:
+\begin{itemize}
+    \item the coarse group is copied from the best palette candidate only when its emission is below $\theta$;
+    \item the middle group is always copied from the best palette candidate;
+    \item the fine group is synthesized by a top-$k$ token vote over the best candidate set.
+\end{itemize}
+For each fine-layer token position, the selected code index is the mode under softmax weights derived from the fine-group distances of the top-$k$ candidates using temperature $\tau$. The DAC setting uses $\theta=0.55$, $\tau=0.47$, and top-$k=7$. This makes the RVQ-group mode a structured replacement policy rather than a simple binary layer mask.
+
+The default DAC setting is deliberately conservative. It should be read as a gated middle/fine transfer mode with a coarse-band safety valve, not as unconditional replacement of all three RVQ groups. The RVQ-band diagnostic in Section~\ref{sec:results} therefore reports both gated and forced variants: gated rows describe the default operating point, while forced rows probe the acoustic role of each band.
+
+\subsection{Continuity-Constrained Sequence Optimization}
+
+Naïve greedy matching selects for each source grain $n$ the palette candidate minimizing the instantaneous emission cost:
+\begin{equation}
+    k_n^{\text{greedy}} = \arg\min_i e(i \mid n).
+\end{equation}
+This often produces rapid index switching. We instead define a sequence objective over palette indices $\mathbf{k} = (k_1,\dots,k_T)$:
+\begin{equation}
+    \mathcal{J}(\mathbf{k}) =
+    \sum_{n=1}^{T} e(k_n \mid n)
+    + \lambda \sum_{n=2}^{T} \Delta(k_{n-1}, k_n).
+\end{equation}
+The transition term is
+\begin{equation}
+    \Delta(i,j) = \left(1 - \langle \mathbf{d}^{\mathrm{full}}_i,\mathbf{d}^{\mathrm{full}}_j \rangle\right) + m(i,j),
+\end{equation}
+where the first term is full-descriptor cosine distance and $m(i,j)$ is a metadata penalty equal to $1$ for cross-file transitions and otherwise proportional to the within-file frame jump when the selected grains are not adjacent. This discourages both latent discontinuity and large jumps inside a palette recording. The DAC experiments use $\lambda=0.93$.
+
+We approximate the minimization of $\mathcal{J}$ with a beam search over the per-grain candidate lists. The implementation uses beam width $B=12$ and candidate count $K=96$, keeping only the best partial paths at each grain and yielding predictable complexity $\mathcal{O}(T B K)$. Greedy matching is retained as an ablation to isolate the effect of sequence optimization.
+
+For the sequence baseline ladder, we also report greedy selection with a temporal smoothing pass and exact Viterbi decoding over the same retained Top-$K$ candidate graph. The Viterbi run minimizes the same emission-plus-transition objective within the retained candidates, but has higher sequence-runtime cost. It is therefore used as a diagnostic reference for the quality/runtime frontier, while bounded beam search is the deployable compromise used by the main method.
+
+\subsection{Streaming Operation}
+
+The reference evaluation pipeline processes complete excerpts, but the same search logic can be applied to chunked operation. In the realtime-proxy experiment we process sequential waveform chunks and carry forward the previously selected palette index to seed the next chunk. This does not preserve the full beam state across blocks; instead, it preserves a one-step continuity context that is compatible with bounded plugin scheduling. For this reason, chunked operation is evaluated as a deployment proxy rather than as an identical implementation of the full-context optimizer.
+
+\section{Plugin Implementation}\label{sec:implementation}
+
+The system is implemented as a JUCE-based VST3/AU insert effect plus a Python reference path used for ablations and metric extraction. The architecture consists of:
+
+\begin{enumerate}
+    \item Offline palette preprocessing: encoding, grain extraction, descriptor computation, and indexing.
+    \item Runtime processing: source encoding, descriptor extraction, candidate retrieval, beam search, token swapping, and decoding.
+\end{enumerate}
+
+The standalone plugin interface is used during development and validation to load source audio, rebuild the palette cache, adjust sequence and RVQ controls, and audition rendered output.
+
+To meet real-time constraints:
+
+\begin{itemize}
+    \item Palette descriptors are stored in memory with optional approximate nearest neighbor indexing.
+    \item Codec encoder and decoder operate in batched frame mode.
+    \item Beam width $B$, candidate count $K$, grain size, and RVQ transfer parameters are user-adjustable.
+\end{itemize}
+
+In live mode, the reported plugin latency is
+\begin{equation}
+\text{latency}_{\mathrm{live}} = \max(256,\,2\cdot B_{\mathrm{blk}})\ \text{samples},
+\end{equation}
+where $B_{\mathrm{blk}}$ is the host audio block size in samples.
+For the strict DAC objective runs, mean end-to-end RTF is approximately 0.217--0.236 across the four 96-pair main conditions (Table~\ref{tab:dac-main}). The bounded palette-scaling diagnostic reaches the full 247-clip strict palette at median RTF 0.236 on the 24-clip diagnostic split (Table~\ref{tab:palette-scaling}). A small SpectroStream strict-palette smoke test is reported only as native-RVQ portability evidence, not as a full cross-codec benchmark (Appendix~\ref{sec:app-portability}). CoDiCodec-style non-RVQ adapters are separated from the native-RVQ claim because their exposed representation is not a DAC-style multi-codebook RVQ stack. Plugin-side buffer memory is bounded by implementation-defined allocations (input history/pending buffers, a 4096-sample quality tail, a 64-block decoded FIFO, and an 8-entry morph cache), while total process RSS is not measured in this study.
+
+Observed real-time failure modes include:
+\begin{itemize}
+    \item Palette not ready or rebuilding: realtime state is cleared and morph updates are skipped.
+    \item Backend unavailable: fallback reasons include bridge unavailable, codec switch failure, missing native DAC model path, native load failure, and SpectroStream requiring the Python bridge.
+    \item Empty encode/match/decode result: the current morph update is skipped.
+    \item Decoded FIFO overflow: the oldest morphed block is dropped.
+    \item Wet-buffer underrun: wet availability is reduced instead of blocking the audio thread.
+\end{itemize}
+
+Our work reports the reference pipeline as the primary measurement path and uses the chunked parity sweep to characterize deployment-sensitive behavior.
+
+\section{Evaluation}\label{sec:evaluation}
+
+We evaluate four aspects: reference proximity, temporal structure, runtime/system health, and realtime-proxy parity. The metrics are not intended to replace perceptual evaluation. Instead, they test whether the method satisfies the narrower claims made in this paper: sequence optimization should reduce unstable palette switching, RVQ grouping should change the structure/detail trade-off, and chunked processing should remain close enough to full-context rendering to be useful in a DAW-oriented workflow.
+
+\subsection{Dataset and Protocol}
+
+The evaluation dataset is prepared deterministically from immutable manifests. The strict palette contains 247 Freesound clips~\cite{fonseca2017freesound} of 5--15~s duration after exact license filtering to \texttt{CC0-1.0}, \texttt{CC-BY-3.0}, \texttt{CC-BY-4.0}, \texttt{CC-BY-SA-3.0}, and \texttt{CC-BY-SA-4.0}; nine Sampling+ clips from the earlier 256-clip pool are excluded by the manifest audit. Source and reference clips are 96 disjoint 8~s center crops from the WaivOps Lo-Fi Drums corpus~\cite{patchbanks_waivops_2025_lofi_drums}, licensed \texttt{CC-BY-4.0}. Split leakage is checked by resolved file path and SHA-256 file hash. We do not claim that the source/reference crops are ground-truth waveform pairs; they are held-out comparison material for corpus-proximity metrics.
+
+Freesound~\cite{fonseca2017freesound} was chosen to emulate a heterogeneous user palette rather than a curated single-instrument corpus. The intended artistic use of the VST targets percussive or drum-based tracks, and we therefore use Lofi Drums for the main source/reference data. This choice is a strength for the claimed use case and a limitation for generality: percussive material makes onset preservation, chattering, and envelope stability easier to inspect, but it does not prove behavior on harmonic, melodic, or vocal material.
+
+Our main DAC experiment evaluates the fixed 96-pair test manifest and the fixed four-condition ablation matrix:
+\begin{enumerate}
+    \item greedy matching with full-layer swap,
+    \item greedy matching with RVQ-group swap,
+    \item beam search with full-layer swap,
+    \item beam search with RVQ-group swap.
+\end{enumerate}
+The 96 DAC pairs are ordered deterministically by round-robin over the available tempo buckets derived from the source filenames; the legacy 32-pair flag is retained only for subset comparability with the earlier 32-pair study. The DAC experiment uses the strict 247-clip palette, with seeded runs retained as reproducibility/runtime checks. Because the available 96 source/reference pairs are all assigned to the main test manifest, parameter sweeps and band probes are reported as bounded diagnostics rather than as independently tuned development-set results. The portability appendix uses a reduced deterministic SpectroStream strict-palette smoke test and is reported only as bounded native-RVQ transfer evidence. To keep the evidence aligned with the claim scope, non-percussive examples are treated as sanity checks and audio-demo material rather than as a basis for broad generalization.
+
+\subsection{Metrics}
+
+Reference proximity is measured with Fr\'echet Audio Distance (FAD) \cite{Kilgour:2019:FAD}, spectral convergence, and log-spectral distance against the held-out reference clips. FAD is a distribution-level measure: lower values indicate that the generated set is closer to the reference set in the embedding space used by the metric. Spectral convergence measures relative STFT-magnitude error, and log-spectral distance measures average log-magnitude deviation. These metrics are useful for checking whether generated material moves toward the held-out reference corpus, but they should not be read as waveform-similarity scores to a known target transformation.
+
+Structural stability is measured with palette-index jitter, token discontinuity, waveform discontinuity at estimated grain boundaries, chromagram difference, envelope correlation, source-onset F1, and boundary phase jump. Token discontinuity is the normalized Hamming change between consecutive token frames, so lower values indicate smoother decoder-facing token trajectories. Waveform discontinuity estimates short-time energy jumps around grain boundaries, where lower values indicate fewer boundary-level amplitude jumps. Chromagram difference compares pitch-class energy profiles against the reference and is included because some palette choices can change harmonic color even in drum-oriented material. Envelope correlation and source-onset F1 are computed against the source rather than the reference to quantify preservation of source structure; higher values indicate stronger preservation of the source amplitude envelope and onset pattern. Boundary phase jump measures average phase discontinuity near estimated grain boundaries, where lower values indicate smoother local phase behavior.
+
+Palette-transfer diagnostics are reported through output-to-nearest-palette distance, output-to-source distance where available, and palette-embedding shift. These metrics are not perceptual preference scores. They indicate whether a condition moves the generated examples toward the palette distribution while preserving source-derived timing anchors.
+
+Index jitter is the direct diagnostic for the sequence-optimization claim. It is defined as the mean absolute jump in matched palette-grain index between consecutive grain steps:
+\begin{equation}
+\mathrm{Jitter} = \frac{1}{T-1}\sum_{t=2}^{T} \left|k_t-k_{t-1}\right|,
+\end{equation}
+where $k_t$ is the matched palette-grain index at grain step $t$. Jitter is therefore reported in raw palette-index units (not time units).
+
+The protocol also records system-health metrics: encode/decode success, token layout validity, channel consistency, determinism, clipping fraction, duration drift, failure count, retry count, and end-to-end realtime factor (RTF). These are not perceptual metrics; they verify that a condition produced valid codec tokens, stable channel layouts, deterministic outputs, bounded duration drift, and acceptable runtime behavior. Conditions that violate the paper health gates are excluded from preset export and called out explicitly in the system-health table.
+
+Statistical testing uses paired Wilcoxon signed-rank tests \cite{Wilcoxon:1945:IndividualComparisons} relative to the greedy full-layer baseline, with Benjamini--Hochberg correction \cite{Benjamini:1995:FDR} across the paired per-clip metrics. FAD is reported descriptively at the set level and is not included in the paired significance table.
+
+\subsection{Realtime-Proxy Parity}
+
+To quantify deployment sensitivity, we compare full-context reference renders against chunked sequential proxy renders across chunk sizes 8192, 16384, and 32768 samples. The main parity study uses a deterministic 12-clip DAC subset stratified across the available tempo buckets. Because the beam-search objective is specifically designed to reduce palette-index instability, chunked operation is inspected with audio-domain parity metrics rather than treated as an equivalent optimizer. Since chunking changes the number of grain decisions and carries only bounded context, this diagnostic should be read as a deployment-sensitivity check rather than as a direct optimality comparison with full-context beam search.
+
+\subsection{Bounded Additional Analyses}
+
+Additional analyses are treated as bounded diagnostics rather than new central claims. First, a DAC $\rho$ sweep and a grain/hop sweep probe local control and deployment sensitivity around the tuned operating point using the strict 247-clip palette. Second, an RVQ-band probe applies identity, default gated, and forced band substitutions to expose what the DAC bands contribute on the tested slice. Third, derived strict-palette subsets test palette-size/runtime scaling. Fourth, a SpectroStream smoke test checks that the same native-RVQ evaluation path can run on a second backend. Older identity and descriptor-based waveform mosaicing rows are retained only as interpretive sanity checks where available, not as an exhaustive SOTA comparison. Finally, non-percussive examples are treated as audio-demo and failure-probing material rather than as a basis for broad generalization. These additions are intended to constrain the claims: the main evidence remains strongest for percussive, rhythm-preserving sound-design use, while broader musical material requires further evaluation.
+
+Table~\ref{tab:claim-evidence} maps each strengthened claim to its required evidence and explicitly separates completed main-test evidence from bounded diagnostics and runtime checks.
+
+\begin{table*}[t]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{0.18\textwidth}p{0.15\textwidth}p{0.10\textwidth}p{0.19\textwidth}p{0.19\textwidth}p{0.13\textwidth}}
+\toprule
+Claim & Experiment & Split & Metric & Result & Limitation \\
+\midrule
+Beam/sequence optimization improves palette-path continuity. & Sequence optimizer comparison & test & $J$, transition cost, index jitter, file-switch rate & sequence: median jitter 24727.77 $\rightarrow$ 11134.44 for greedy\_rvq\_group vs beam\_rvq\_group. & Bounded by retained Top-$K$ candidates. \\
+RVQ-group transfer exposes source-structure vs palette-detail control. & RVQ threshold/band and $\rho$ sweeps & test diagnostics & token change rates, source/onset metrics, palette distance & coarse activation 0.0\% at 0.40 and 100.0\% at 1.00; palette shift -10.521 $\rightarrow$ -10.323 over $\rho$ sweep. & Coarse gate claim depends on activation fraction. \\
+The method is deployable under realistic palette/chunk/runtime constraints. & Chunk/block parity and palette scaling & test/runtime & RTF, latency, sequence runtime, parity SC/LSD & best diagnostic RTF 0.233 at unit/stride 7/2; palette scaling reaches 247 clips at median RTF 0.236; chunk parity at 32768 samples has SC 0.291 and LSD 8.675. & Hardware and backend dependent. \\
+\bottomrule
+\end{tabular}
+\caption{Claim-to-evidence map.}
+\label{tab:claim-evidence}
+\end{table*}
+
+\section{Results}\label{sec:results}
+
+\subsection{DAC Main Experiment}
+
+Table~\ref{tab:dac-main} reports the main DAC ablation results. The table is intended to be read as a trade-off surface rather than a single-winner leaderboard. The evaluation asks two primary questions: whether sequence optimization reduces unstable palette switching, and whether RVQ grouping exposes a useful structure/detail control.
+
+The clearest answer concerns sequence instability. Comparing matched swap policies, beam search reduces palette-index jitter relative to greedy matching, which is the direct objective of the continuity term. In the RVQ-group condition, mean jitter falls from 24.66k (95\% bootstrap CI 24.20--25.14k) for greedy matching to 11.52k (95\% CI 11.12--11.93k) for beam search. The paired median difference against the greedy full-layer baseline is -13.26k with rank-biserial effect size $r_{rb}=-1.00$ after BH correction. This supports the central claim that token-domain palette morphing should be treated as a sequence-selection problem rather than as independent nearest-neighbor matching at each grain.
+
+The RVQ grouping result should be interpreted as controllability rather than absolute improvement. Under the conservative DAC threshold, full-layer replacement often acts as a gated reconstruction/control condition: implausible full-stack substitutions are rejected and source tokens are retained. RVQ-group swapping is more active because it retains the same conservative coarse gate while still replacing the middle band and voting over fine-band tokens. This shifts the balance between source-structure preservation and palette-driven residual detail. The higher FAD for RVQ-group rows should therefore be read as a distributional shift away from the held-out reference set, not as direct evidence that the hybrids sound worse.
+
+Supporting system-health and significance analyses are reported in Table~\ref{tab:dac-support}. All four DAC conditions pass the health gates, while the significance rows show that index jitter is the most consistent beam-search gain and that RVQ-group swapping primarily shifts the reference-proximity--structure balance.
+
+\begin{table}[!t]
+    \centering
+    \scriptsize
+    \setlength{\tabcolsep}{1.4pt}
+    \caption{Main 96-pair DAC ablation results. Values are means except FAD, which is set-level. Lower is better except for envelope correlation. Jit is shown in thousands (k) of raw palette-index jump units.}
+    \label{tab:dac-main}
+    \begin{tabular}{lrrrrrrr}
+    \toprule
+    Method & FAD$\downarrow$ & SC$\downarrow$ & LSD$\downarrow$ & Jit$\downarrow$ & TokDis$\downarrow$ & EnvC$\uparrow$ & RTF$\downarrow$ \\
+    \midrule
+    B-RVQ & 1.134 & 1.307 & 27.037 & 11.52k & 0.801 & 0.986 & 0.217 \\
+    B-Full & 0.172 & 1.397 & 27.088 & 11.52k & 0.843 & 0.999 & 0.236 \\
+    G-Full & 0.172 & 1.397 & 27.088 & 24.66k & 0.843 & 0.999 & 0.223 \\
+    G-RVQ & 0.961 & 1.310 & 26.934 & 24.66k & 0.806 & 0.987 & 0.232 \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+\begin{table}[!t]
+    \centering
+    \scriptsize
+    \caption{DAC supporting analyses. Top: system-health summary. Chan. reports valid output channel layout. Bottom: paired per-clip metrics significant after Benjamini--Hochberg correction against the greedy full-layer baseline, with rank-biserial effect-size signs where central to the claim. Codes: B$=$beam, G$=$greedy, Full$=$full-layer, RVQ$=$RVQ-group.}
+    \label{tab:dac-support}
+    \setlength{\tabcolsep}{2.2pt}
+    \begin{tabular}{lrrrrrr}
+    \toprule
+    Method & Gate & Enc. & Dec. & Chan. & Det. & Drift95ms \\
+    \midrule
+    B-Full & pass & 1.00 & 1.00 & 1.00 & 1.00 & 10.9 \\
+    B-RVQ & pass & 1.00 & 1.00 & 1.00 & 1.00 & 10.9 \\
+    G-Full & pass & 1.00 & 1.00 & 1.00 & 1.00 & 10.9 \\
+    G-RVQ & pass & 1.00 & 1.00 & 1.00 & 1.00 & 10.9 \\
+    \bottomrule
+    \end{tabular}
+
+    \vspace{0.35em}
+    \setlength{\tabcolsep}{2pt}
+    \begin{tabular}{p{0.20\columnwidth}p{0.74\columnwidth}}
+    \toprule
+    Cmp & Significant metrics (BH $< 0.05$) \\
+    \midrule
+    B-Full & idx jitter ($r_{rb}=-1.00$), file switch ($r_{rb}=-1.00$), adjacent steps ($r_{rb}=1.00$) \\
+    B-RVQ & SC, LSD, idx jitter ($r_{rb}=-1.00$), tok disc, env corr, source/palette distance \\
+    G-RVQ & SC, LSD, tok disc, env corr, source/palette distance \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+Table~\ref{tab:dac-path} supplements raw palette-index jitter with path-structure metrics. Raw index jumps depend on palette ordering, so we also report file-switch rate, adjacent-step rate, transition cost, and sequence runtime for the RVQ-group sequence baselines. Greedy smoothing, beam search, and Viterbi all reduce file switches and increase adjacent within-file steps relative to frame-local greedy matching. Exact Viterbi gives the lowest objective and smoothest path in this retained-candidate graph, but it costs 12.83~s per sequence on average. Beam search occupies the intended middle point: it is much slower than greedy smoothing, but it improves objective, transition cost, jitter, file-switch rate, and adjacent-step rate while using about 1.74~s per sequence in this implementation.
+
+\begin{table}[!t]
+    \centering
+    \scriptsize
+    \setlength{\tabcolsep}{2pt}
+    \caption{DAC path-continuity diagnostics for the 96-pair RVQ-group sequence comparison. Values are means. File switch and Adjacent are transition rates.}
+    \label{tab:dac-path}
+    \begin{tabular}{lrrrrrr}
+    \toprule
+    Method & $J$ & Trans. & Jit & File sw. & Adjacent & Seq ms \\
+    \midrule
+    G-RVQ & 922.7 & 628.5 & 24.66k & 78.1\% & 14.9\% & 2.5 \\
+    G-Smooth & 798.9 & 495.2 & 13.47k & 40.9\% & 50.3\% & 145 \\
+    Beam & 778.8 & 473.6 & 11.52k & 35.2\% & 57.3\% & 1737 \\
+    Viterbi & 722.1 & 412.5 & 6.46k & 19.4\% & 76.2\% & 12830 \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+\FloatBarrier
+
+\subsection{DAC Realtime-Proxy Parity}
+
+Table~\ref{tab:dac-parity} summarizes the gap between full-context DAC renders and chunked proxy renders. Larger chunks produce closer parity on spectral convergence and log-spectral distance, while envelope correlation remains near ceiling across the tested chunk sizes. This indicates that the chunking penalty in the DAC path is driven more by spectral/detail mismatch than by gross envelope drift.
+
+The parity sweep answers a deployment question rather than an algorithmic optimality question: it measures how far a bounded chunked proxy departs from the full-context reference render. Since the chunked proxy carries only a one-step previous index rather than the full beam state, the spectral parity trend in Table~\ref{tab:dac-parity} should be read as a deployment-sensitivity curve rather than as proof that chunked search is equivalent to full-context beam search. Larger chunks reduce full-context spectral mismatch, while envelope correlation remains high across the tested chunk sizes.
+
+\begin{table}[!t]
+    \centering
+    \small
+    \caption{DAC realtime-proxy parity across chunk sizes for the 12-clip beam+RVQ strict-palette sweep.}
+    \label{tab:dac-parity}
+    \begin{tabular}{rrrrr}
+    \toprule
+    Chunk & SC$\downarrow$ & LSD$\downarrow$ & EnvCorr$\uparrow$ & Chroma$\downarrow$ \\
+    \midrule
+    8192 & 0.355 & 10.597 & 0.983 & 0.155 \\
+    16384 & 0.317 & 9.277 & 0.986 & 0.147 \\
+    32768 & 0.291 & 8.675 & 0.988 & 0.140 \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Control and Deployment Diagnostics}
+
+Table~\ref{tab:rho-diagnostic} reports the 24-clip $\rho$ diagnostic for the beam+RVQ-group setting with the strict 247-clip palette. Increasing $\rho$ produces a small but monotonic increase in middle/fine token-change rates and a modest palette-embedding shift, while source-envelope correlation remains stable near 0.987--0.988. This supports the narrower controllability claim: $\rho$ changes the palette-detail/source-structure balance measurably, but the observed effect size is bounded on this drum slice.
+
+\begin{table}[!t]
+    \centering
+    \scriptsize
+    \setlength{\tabcolsep}{2.8pt}
+    \caption{Twenty-four-clip DAC $\rho$ diagnostic for beam+RVQ-group. Values are means except Shift, which is the mean palette-embedding shift.}
+    \label{tab:rho-diagnostic}
+    \begin{tabular}{rrrrr}
+    \toprule
+    $\rho$ & EnvCorr & Mid chg & Fine chg & Shift \\
+    \midrule
+    0.00 & 0.987 & 0.821 & 0.843 & -10.471 \\
+    0.30 & 0.988 & 0.821 & 0.842 & -10.459 \\
+    0.70 & 0.987 & 0.825 & 0.844 & -10.414 \\
+    1.00 & 0.988 & 0.828 & 0.847 & -10.336 \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+Table~\ref{tab:grain-hop-diagnostic} summarizes the 24-clip grain/hop diagnostic. Larger grains and hops reduce sequence-runtime cost, while all tested settings remain below realtime on this hardware. The result is a deployment diagnostic rather than a universal speed claim, because total runtime also depends on codec caching, palette size, and hardware scheduling.
+
+\begin{table}[!t]
+    \centering
+    \scriptsize
+    \setlength{\tabcolsep}{2.8pt}
+    \caption{Twenty-four-clip grain/hop diagnostic for beam+RVQ-group. Seq is mean sequence runtime in ms; RTF is mean end-to-end realtime factor.}
+    \label{tab:grain-hop-diagnostic}
+    \begin{tabular}{rrrrr}
+    \toprule
+    $G$ & $H$ & EnvCorr & Seq ms & RTF \\
+    \midrule
+    3 & 1 & 0.989 & 3646 & 0.233 \\
+    5 & 1 & 0.987 & 3591 & 0.239 \\
+    7 & 2 & 0.988 & 1825 & 0.247 \\
+    9 & 3 & 0.987 & 1237 & 0.235 \\
+    11 & 4 & 0.987 & 991 & 0.250 \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+Table~\ref{tab:rvq-band-diagnostic} reports the RVQ-band separability diagnostic. It is intentionally diagnostic rather than a new mode comparison. With the default DAC threshold, the coarse gate admits 0\% of selected grains on this slice, so default coarse-only and full-layer substitutions collapse to identity reconstruction. Forced rows disable the gate only to probe the representation: forced coarse replacement changes 79.1\% of coarse tokens and strongly degrades source-envelope preservation, while middle-only and fine-only substitutions produce smaller but distinct source-proximity changes. This supports a narrower claim: the bands provide useful control axes in DAC, but the default setting is conservative and mainly activates middle/fine transfer on the tested drum material.
+
+\begin{table}[!t]
+    \centering
+    \scriptsize
+    \setlength{\tabcolsep}{2pt}
+    \caption{Twenty-four-clip DAC RVQ-band diagnostic. SrcDist and Envsrc are measured against the source; C-gate is the fraction of selected grains passing the default coarse threshold. C/M/F chg are token-change rates within each band. Forced rows disable the gate only as a diagnostic.}
+    \label{tab:rvq-band-diagnostic}
+    \begin{tabular}{lrrrrrr}
+    \toprule
+    Policy & SrcDist & Envsrc & C-gate & C chg & M chg & F chg \\
+    \midrule
+    Identity & 10.884 & 0.999 & 0.0\% & 0.0\% & 0.0\% & 0.0\% \\
+    Coarse only & 10.884 & 0.999 & 0.0\% & 0.0\% & 0.0\% & 0.0\% \\
+    Coarse forced & 16.200 & 0.600 & 0.0\% & 79.1\% & 0.0\% & 0.0\% \\
+    Middle only & 11.341 & 0.993 & 0.0\% & 0.0\% & 82.1\% & 0.0\% \\
+    Fine only & 11.114 & 0.996 & 0.0\% & 0.0\% & 0.0\% & 84.2\% \\
+    RVQ group & 11.623 & 0.988 & 0.0\% & 0.0\% & 82.1\% & 84.2\% \\
+    Full layer & 10.884 & 0.999 & 0.0\% & 0.0\% & 0.0\% & 0.0\% \\
+    Full forced & 17.265 & 0.583 & 0.0\% & 79.1\% & 82.1\% & 85.3\% \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+Table~\ref{tab:palette-scaling} reports the strict-palette scaling diagnostic. The 32-, 64-, and 128-clip rows use derived strict-palette manifests, and the 247-clip row reuses the strict full-palette diagnostic condition. Median RTF remains below 0.24 across the palette sizes, but total runtime has a heavy tail at 247 clips because palette encoding and cache effects dominate some clips. This supports the practical deployability claim only in the bounded sense used throughout the paper: the reference implementation is comfortably sub-realtime on this hardware once the palette is available, while production deployment still depends on caching and backend scheduling.
+
+\begin{table}[!t]
+    \centering
+    \scriptsize
+    \setlength{\tabcolsep}{2.8pt}
+    \caption{Palette-size scaling diagnostic for beam+RVQ-group on the 24-clip diagnostic split. Values are medians.}
+    \label{tab:palette-scaling}
+    \begin{tabular}{rrrrr}
+    \toprule
+    Palette & Seq ms & Total ms & RTF & Decode ms \\
+    \midrule
+    32 & 1798 & 4527 & 0.236 & 236 \\
+    64 & 1716 & 4498 & 0.237 & 234 \\
+    128 & 1657 & 4629 & 0.229 & 240 \\
+    247 & 1712 & 5822 & 0.236 & 237 \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+The current evaluation package does not use the older identity and descriptor-mosaicing rows as central evidence. Those baselines remain useful sanity checks for interpreting waveform-proximity language, but they are not treated as a complete SOTA comparison. This paper therefore anchors its claims on the deterministic DAC ablations, RVQ-band diagnostics, palette/chunk/runtime sweeps, and the bounded SpectroStream smoke test rather than on a broad baseline leaderboard.
+
+
+\section{Discussion}
+
+The results support the paper's three bounded claims. First, token-domain palette morphing should be optimized as a sequence problem: beam search reduces palette-path instability relative to greedy matching, and the Viterbi comparison shows that this gain is part of a clear quality/runtime frontier rather than an arbitrary heuristic. Second, RVQ-group transfer is useful as a control surface, not as a universal fidelity improvement. The group-aware mode changes source-envelope, token-discontinuity, and palette-distance diagnostics in a way that is consistent with hybrid sound design, where the desired output is neither source reconstruction nor target recovery. Third, the runtime, palette-scaling, and chunked parity results show that the reference implementation can operate under realistic constraints on the tested hardware, while still exposing where chunked processing departs from full-context rendering.
+
+The RVQ-band diagnostics are important for interpreting the method honestly. The default DAC threshold keeps coarse replacement inactive on the tested drum slice, so the default operating point is better described as gated middle/fine RVQ transfer with a conservative coarse safety valve. Forced coarse replacement demonstrates that the coarse band is acoustically consequential, but it also degrades source-envelope preservation, which explains why the conservative gate is appropriate for the current percussive setting. This narrows the claim from "three-band transfer is always active" to "the RVQ hierarchy gives measurable control axes, with the default configuration primarily using middle/fine transfer."
+
+The terminology is also intentionally limited. Neural Morphing is the artistic system name, while the technical contribution is token-domain palette-based morphing with mosaicing-like sequence selection. The method does not replace STFT/vocoder morphing, descriptor-based waveform mosaicing, or trained generative transformation models. It instead shows that pretrained codec tokens can support a deployable sound-design workflow when sequence continuity, RVQ layer structure, and runtime constraints are evaluated explicitly.
+
+The main limitations are scope and validation depth. The strongest evidence is for percussive Lo-Fi Drums material and a strict Freesound palette; harmonic, vocal, and long-form material may expose different interactions between coarse and residual RVQ groups. The learned descriptor space is less interpretable than hand-designed audio descriptors, and runtime remains dependent on palette size, caching, backend scheduling, and beam width. SpectroStream provides a small native-RVQ portability check, but CoDiCodec is only a non-RVQ backend-adaptation stress case. Finally, no formal listening test is included, so perceptual preference and musical usefulness remain to be validated by controlled listening studies.
+
+Future work should expand the dataset beyond drum-oriented material, evaluate longer-context and lower-latency streaming conditions, add controlled listening tests, and investigate learned or confidence-weighted transition models that retain the deployment advantages of the current training-free pipeline.
+
+\section{Conclusion}
+This paper presented \emph{Neural Morphing}, a training-free codec-token audio effect for palette-based morphing. The key idea is to treat neural-codec token grains as a learned unit domain: RVQ groups provide a controllable structure/detail axis, and sequence optimization provides temporal continuity across selected palette grains. On the 96-pair DAC study, bounded beam search reduces palette-index jitter relative to greedy matching, while RVQ-group transfer changes source-structure and palette-transfer diagnostics in a measurable trade-off. Deployment diagnostics further show sub-realtime reference behavior under the tested palette sizes and bounded chunked-rendering parity, with SpectroStream providing limited native-RVQ portability evidence. The current evidence supports percussive, rhythm-preserving sound-design use; extending the method to broader musical material and validating perceptual preferences with listeners are the next required steps.
+
+% \section{Acknowledgments}
+
+%\newpage
+\bibliographystyle{IEEEtranDAFx}
+\bibliography{references}
+
+\appendix
+
+\section{Portability Study}\label{sec:app-portability}
+
+This appendix reports bounded portability evidence across alternative codec back-ends. The current evaluation package uses SpectroStream \cite{Li:2025:SpectroStream} as the native-RVQ portability check. CoDiCodec \cite{Pasini:2025:CoDiCodec} is not used as native-RVQ evidence here because its exposed representation in the current integration is not equivalent to a DAC-style multi-codebook RVQ stack; it is better treated as a separate backend-adaptation stress test.
+
+The portability analysis asks three practical questions: (i) whether continuity-constrained beam search still improves sequence stability, (ii) whether RVQ-group swapping continues to expose a controllable structure-versus-detail trade-off when the backend has native RVQ layers, and (iii) whether chunked deployment remains bounded enough for plugin-oriented operation as backend assumptions change.
+
+\subsection{SpectroStream Strict-Palette Smoke Test}
+
+Table~\ref{tab:port-spectro-smoke} reports a two-clip strict-palette SpectroStream smoke test with greedy and beam RVQ-group settings. The goal is not statistical comparison; $n=2$ is too small for that. Instead, this confirms that the same evaluation harness, strict palette manifest, RVQ-group policy, and sequence diagnostics can run on a second native-RVQ backend. The observed trend is consistent with the DAC sequence claim: beam search reduces raw index jitter in the smoke slice while preserving high source-envelope correlation. Runtime is backend-specific and should not be compared directly with the DAC main table.
+
+\begin{table}[!t]
+    \centering
+    \scriptsize
+    \setlength{\tabcolsep}{2.2pt}
+    \caption{SpectroStream strict-palette smoke test. Values are means over two clips.}
+    \label{tab:port-spectro-smoke}
+    \begin{tabular}{lrrrrrr}
+    \toprule
+    Method & FAD$\downarrow$ & SC$\downarrow$ & LSD$\downarrow$ & Jitter$\downarrow$ & EnvCorr$\uparrow$ & RTF$\downarrow$ \\
+    \midrule
+    Greedy-RVQ & 2.388 & 1.125 & 24.003 & 9075 & 0.992 & 2.265 \\
+    Beam-RVQ & 2.388 & 1.099 & 23.949 & 4065 & 0.992 & 0.944 \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+The DAC chunked parity sweep in Section~\ref{sec:results} remains the deployment-sensitive evidence for the current paper. Extending the same chunked parity protocol to SpectroStream is future work; the smoke test only establishes that the native-RVQ backend can be evaluated and that the sequence optimizer remains meaningful in its token space.
+
+\section{Response to Reviewers}\label{sec:app-review-response}
+
+This appendix summarizes the changes made for resubmission. We interpret the previous reviews as raising concerns about claim scope, dataset provenance, objective evaluation strength, sequence baselines, RVQ-band interpretation, deployability, portability, and the absence of perceptual validation. The revised paper addresses these concerns as follows.
+
+\begin{enumerate}
+    \item \textbf{Scope and terminology.} The paper now describes the technical contribution as \emph{token-domain palette-based morphing} rather than as a general solution to audio morphing. The introduction, discussion, and conclusion explicitly limit the strongest evidence to percussive, rhythm-preserving sound-design use with native-RVQ codecs.
+    \item \textbf{Dataset provenance and licensing.} The evaluation is tied to immutable manifests. The strict palette contains 247 Freesound clips after exact license filtering to \texttt{CC0-1.0}, \texttt{CC-BY-3.0}, \texttt{CC-BY-4.0}, \texttt{CC-BY-SA-3.0}, and \texttt{CC-BY-SA-4.0}; Sampling+ clips from the earlier pool are excluded. The 96 source/reference examples are disjoint 8~s crops from the WaivOps Lo-Fi Drums corpus under \texttt{CC-BY-4.0}. The earlier 32-pair subset is retained only for legacy comparison.
+    \item \textbf{Main DAC evaluation.} The revised main result is the 96-pair DAC ablation with greedy/full-layer, greedy/RVQ-group, beam/full-layer, and beam/RVQ-group conditions. The paper reports distributional and paired statistics, including bootstrap confidence intervals, Wilcoxon signed-rank tests, Benjamini--Hochberg correction, and effect-size signs for the central paired comparisons.
+    \item \textbf{Sequence baselines.} The resubmission adds a sequence-optimizer comparison among greedy matching, greedy smoothing, bounded beam search, and exact Viterbi over the same retained Top-$K$ candidates. This changes the claim from ``beam search is a useful heuristic'' to ``beam search is a bounded runtime/quality compromise.'' In the RVQ-group comparison, beam reduces mean index jitter from 24.66k to 11.52k, while Viterbi gives a smoother but slower diagnostic reference.
+    \item \textbf{RVQ-band interpretation.} The paper now gives the exact RVQ partition and $\rho$ weighting formula, and it separates default gated behavior from forced diagnostic substitutions. The DAC band diagnostic shows that the default coarse gate is inactive on the tested drum slice, so the default mode is described as gated middle/fine RVQ transfer with a conservative coarse safety valve rather than unconditional three-band replacement.
+    \item \textbf{Runtime and deployment evidence.} The revised evaluation includes health-gated runtime reporting, chunked realtime-proxy parity, grain/hop diagnostics, and palette-size scaling. The paper does not claim universal realtime performance; it reports bounded behavior for the tested implementation, palette sizes, chunk sizes, and hardware-dependent backend path.
+    \item \textbf{Portability.} SpectroStream is kept as the native-RVQ portability check. CoDiCodec is no longer used as evidence for the RVQ-band claim because the current integration exposes grouped latent slots rather than a DAC-style multi-codebook RVQ stack.
+    \item \textbf{Listening tests.} A formal listening test is not included in this resubmission due to the available revision time. To avoid overclaiming, the paper does not claim perceptual preference, listener-rated quality, or musical usability beyond the stated objective and deployment-oriented evidence. Controlled listening tests remain future work.
+\end{enumerate}
+
+\end{document}
