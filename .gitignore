@@ -30,6 +30,7 @@ env/
 *.temp
 
 /build/
+/build-*/
 /build_nopy/
 /artifacts/
 /outputs/

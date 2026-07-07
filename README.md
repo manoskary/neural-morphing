@@ -1,17 +1,17 @@
 # Neural Morphing Demo
 
-Minimal deployment branch for the Neural Morphing web demo.
+Hybrid demo branch for local plugin testing and hosted Gradio review.
 
-This branch intentionally keeps only the files needed to build and deploy the Gradio reference demo:
+This branch contains:
 
-- `python_project_idea.py` - demo application and DAC morphing prototype.
-- `requirements.txt` - Python runtime dependencies for the demo container.
-- `Dockerfile` - container image definition.
-- `cloudbuild.yaml` - optional Cloud Build pipeline for Cloud Run.
+- `Source/`, `Resources/`, `JUCE/`, `CMakeLists.txt` - VST3 and Standalone build tree.
+- `bridge/` - optional Python bridge runtime used by the plugin.
+- `python_project_idea.py`, `assets/`, `examples/` - Gradio demo app with curated examples.
+- `Dockerfile`, `cloudbuild.yaml` - Cloud Run deployment files.
 
-The full plugin, paper experiments, evaluation tools, and generated artifacts remain on `develop`.
+Paper, evaluation, result, table, and figure artifacts are intentionally not part of this branch.
 
-## Run Locally
+## Run The Gradio Demo
 
 ```bash
 python -m venv .venv
@@ -22,6 +22,43 @@ GRADIO_SERVER_NAME=0.0.0.0 GRADIO_SERVER_PORT=8080 python python_project_idea.py
 ```
 
 Then open `http://localhost:8080`.
+
+The default demo settings are:
+
+- Threshold: `0.99`
+- Playback Dry/Wet: `0.7`
+- Match Mode: `beam`
+- Swap Mode: `full_layer_gated`
+
+## Build The Local Plugin
+
+Configure and build the Python-bridge plugin:
+
+```powershell
+cmake -S . -B build-bridge -G "Visual Studio 17 2022" -A x64 -DNEURAL_MORPHING_ENABLE_ONNX=OFF -DNM_WITH_PYBRIDGE=ON
+cmake --build build-bridge --config Release --target NeuralMorphing_All
+```
+
+Build outputs are written under:
+
+```text
+build-bridge/NeuralMorphing_artefacts/Release/VST3/
+build-bridge/NeuralMorphing_artefacts/Release/Standalone/
+```
+
+Attempt the native ONNX build only when ONNX Runtime is installed and discoverable by CMake:
+
+```powershell
+cmake -S . -B build-onnx -G "Visual Studio 17 2022" -A x64 -DNEURAL_MORPHING_ENABLE_ONNX=ON -DNM_WITH_PYBRIDGE=OFF
+cmake --build build-onnx --config Release --target NeuralMorphing_All
+```
+
+## Python Checks
+
+```powershell
+.\.venv\Scripts\python.exe -m py_compile python_project_idea.py
+.\.venv\Scripts\python.exe -m pytest bridge
+```
 
 ## Build The Container
 
