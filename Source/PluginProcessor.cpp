@@ -405,10 +405,17 @@ void NeuralMorphingAudioProcessor::updateWetAvailability(bool wetAvailable, int 
         return;
     }
 
-    const float fadeSeconds = wetAvailable ? 0.020f : 1.250f;
+    if (wetAvailable)
+    {
+        wetAvailabilityMix_ = 1.0f;
+        wetMixPercent_.store(static_cast<int>(std::lround(getParam("dryWet") * 100.0f)), std::memory_order_release);
+        return;
+    }
+
+    const float fadeSeconds = 1.250f;
     const float fadeSamples = juce::jmax(1.0f, fadeSeconds * static_cast<float>(currentSampleRate_));
     const float step = juce::jlimit(0.0f, 1.0f, static_cast<float>(numSamples) / fadeSamples);
-    const float target = wetAvailable ? 1.0f : 0.0f;
+    const float target = 0.0f;
     if (target > wetAvailabilityMix_)
         wetAvailabilityMix_ = juce::jmin(1.0f, wetAvailabilityMix_ + step);
     else
