@@ -399,6 +399,7 @@ void NeuralMorphingAudioProcessorEditor::applyStandaloneDemoParametersFromEnviro
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_THRESHOLD", "threshold");
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_CONTINUITY", "continuity");
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_RVQ_FOCUS", "rvqFocus");
+    setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_DRY_WET", "dryWet");
 }
 
 void NeuralMorphingAudioProcessorEditor::paint(juce::Graphics& g)

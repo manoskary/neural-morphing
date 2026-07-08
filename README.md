@@ -56,7 +56,7 @@ $env:NEURAL_MORPHING_DEMO_STATUS_FILE="C:\path\status.txt"
 ```
 
 When the bridge and palette are ready, the status line should show `wet=ready` and `tok=NN%`.
-For control-sweep smoke tests, set `NEURAL_MORPHING_DEMO_TEMPERATURE`, `NEURAL_MORPHING_DEMO_THRESHOLD`, `NEURAL_MORPHING_DEMO_CONTINUITY`, or `NEURAL_MORPHING_DEMO_RVQ_FOCUS` before launching and compare the `sig=...` value in the status file.
+For control-sweep smoke tests, set `NEURAL_MORPHING_DEMO_TEMPERATURE`, `NEURAL_MORPHING_DEMO_THRESHOLD`, `NEURAL_MORPHING_DEMO_CONTINUITY`, `NEURAL_MORPHING_DEMO_RVQ_FOCUS`, or `NEURAL_MORPHING_DEMO_DRY_WET` before launching and compare the `sig=...` / `wet=...` values in the status file.
 
 Attempt the native ONNX build only when ONNX Runtime is installed and discoverable by CMake:
 
