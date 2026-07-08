@@ -122,7 +122,8 @@ bool ModelBackendOnnx::load(const std::string& modelRoot)
     auto frameRateVar = obj->getProperty("frame_rate_hz");
     frameRateHz_ = frameRateVar.isVoid() ? 0.0 : static_cast<double>(frameRateVar);
 
-    const juce::String embeddingFileName = obj->getProperty("embedding_file", "embeddings.bin");
+    auto embeddingFileVar = obj->getProperty("embedding_file");
+    const juce::String embeddingFileName = embeddingFileVar.isVoid() ? "embeddings.bin" : embeddingFileVar.toString();
     const juce::File embeddingFile = root.getChildFile(embeddingFileName);
 
     const size_t totalValues = static_cast<size_t>(numCodebooks_) * static_cast<size_t>(codebookSize_) * static_cast<size_t>(embeddingDimPerCodebook_);
@@ -242,10 +243,10 @@ juce::AudioBuffer<float> ModelBackendOnnx::decodeTokens(const TokenBlock& block)
     auto& outTensor = outputs.front();
     auto typeInfo = outTensor.GetTensorTypeAndShapeInfo();
     auto dims = typeInfo.GetShape();
-    if (dims.size() < 2)
+    if (dims.empty())
         return buffer;
 
-    const int channels = static_cast<int>(dims[dims.size() - 2]);
+    const int channels = dims.size() == 1 ? 1 : static_cast<int>(dims[dims.size() - 2]);
     const int samples = static_cast<int>(dims.back());
 
     const float* audioData = outTensor.GetTensorData<float>();

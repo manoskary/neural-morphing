@@ -66,7 +66,11 @@ class DacDecoderWrapper(torch.nn.Module):
 
 def collect_codebooks(model: DacModel) -> List[torch.Tensor]:
     codebooks = []
-    if hasattr(model.quantizer, "codebooks"):
+    if hasattr(model.quantizer, "quantizers"):
+        for quantizer in model.quantizer.quantizers:
+            if hasattr(quantizer, "codebook") and hasattr(quantizer.codebook, "weight"):
+                codebooks.append(quantizer.codebook.weight.detach().cpu())
+    elif hasattr(model.quantizer, "codebooks"):
         for cb in model.quantizer.codebooks:
             if hasattr(cb, "embedding"):
                 codebooks.append(cb.embedding.weight.detach().cpu())
@@ -146,7 +150,7 @@ def main() -> None:
     dummy_wave = torch.zeros(1, args.sample_length, dtype=torch.float32, device=device)
     dummy_tokens = torch.zeros(embedding_info["num_codebooks"], args.sample_length // 256 + 1, dtype=torch.long, device=device)
     with torch.no_grad():
-        one_second_wave = torch.zeros(1, sample_rate, dtype=torch.float32, device=device)
+        one_second_wave = torch.zeros(1, 1, sample_rate, dtype=torch.float32, device=device)
         frame_rate_hz = float(model.encode(one_second_wave).audio_codes.shape[-1])
 
     metadata = {
