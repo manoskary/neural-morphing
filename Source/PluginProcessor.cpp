@@ -613,9 +613,12 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
                 {
                     const bool enoughWetSamples = lastRealtimeMorphReadPosition_ + numSamples <= lastRealtimeMorphBlock_.getNumSamples();
                     if (!enoughWetSamples)
+                    {
                         lastRealtimeMorphWasUnderrun_ = true;
+                        lastRealtimeMorphReadPosition_ = 0;
+                    }
                     morphWetState_.store(lastRealtimeMorphWasUnderrun_ ? 3 : 2, std::memory_order_release);
-                    updateWetAvailability(!lastRealtimeMorphWasUnderrun_, numSamples);
+                    updateWetAvailability(true, numSamples);
                     mixMorphedAudio(buffer, dryBuffer, lastRealtimeMorphBlock_);
                 }
                 else
@@ -1944,7 +1947,7 @@ juce::String NeuralMorphingAudioProcessor::getBackendStatus() const
     {
         case 1: wetState = "pending"; break;
         case 2: wetState = "ready"; break;
-        case 3: wetState = "underrun"; break;
+        case 3: wetState = "repeat"; break;
         case 4: wetState = "bypass"; break;
         default: break;
     }
