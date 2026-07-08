@@ -28,12 +28,12 @@ constexpr int kLiveBeamWidthDefault = 6;
 struct MorphDefaults
 {
     float temperature = 0.47f;
-    float threshold = 0.55f;
+    float threshold = 0.99f;
     float continuity = 0.93f;
     float rvqFocus = 0.30f;
     int unit = 7;
     int stride = 2;
-    int swapMode = 0;
+    int swapMode = 2;
 };
 
 constexpr MorphDefaults kDacDefaults{};
@@ -136,6 +136,7 @@ NeuralMorphingAudioProcessor::NeuralMorphingAudioProcessor()
     liveCandidateCount_ = getEnvIntClamped("NEURAL_MORPHING_LIVE_CANDIDATES", kLiveCandidateCountDefault, 4, matchCandidateCount);
     liveBeamWidth_ = getEnvIntClamped("NEURAL_MORPHING_LIVE_BEAM", kLiveBeamWidthDefault, 1, matchBeamWidth);
 
+    applyDacDemoDefaults();
     initialiseBackend();
     configureRealtimeTimings();
     createWorkers();
@@ -349,7 +350,7 @@ void NeuralMorphingAudioProcessor::updateWetAvailability(bool wetAvailable, int 
         return;
     }
 
-    const float fadeSeconds = 0.020f;
+    const float fadeSeconds = wetAvailable ? 0.020f : 1.250f;
     const float fadeSamples = juce::jmax(1.0f, fadeSeconds * static_cast<float>(currentSampleRate_));
     const float step = juce::jlimit(0.0f, 1.0f, static_cast<float>(numSamples) / fadeSamples);
     const float target = wetAvailable ? 1.0f : 0.0f;
@@ -462,6 +463,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
     juce::AudioBuffer<float> dryBuffer;
     dryBuffer.makeCopyOf(buffer);
     const float dryWet = juce::jlimit(0.0f, 1.0f, getParam("dryWet"));
+    const bool fullWet = dryWet >= 0.999f;
 
     // Hard bypass: if fully dry, avoid bridge/model work in the realtime callback.
     if (dryWet <= 0.0f)
@@ -505,6 +507,8 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
             if (isSilent(backendInputScratch_))
                 targetSegments_.clear();
             clearRealtimeSessionState(true);
+            if (fullWet)
+                buffer.clear();
         }
         else
         {
@@ -555,17 +559,23 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
                 else
                 {
                     updateWetAvailability(false, numSamples);
+                    if (fullWet)
+                        buffer.clear();
                 }
             }
             else
             {
                 clearRealtimeSessionState(true);
+                if (fullWet)
+                    buffer.clear();
             }
         }
     }
     else
     {
         updateWetAvailability(false, numSamples);
+        if (fullWet)
+            buffer.clear();
     }
 
     const float outputGain = juce::Decibels::decibelsToGain(getParam("outputGain"));
@@ -595,6 +605,7 @@ void NeuralMorphingAudioProcessor::setStateInformation(const void* data, int siz
             parameters.replaceState(juce::ValueTree::fromXml(*xml));
     }
 
+    applyDacDemoDefaults();
     const int backendIndex = static_cast<int>(getParam("backend"));
     switchBackend(backendIndex);
     configureRealtimeTimings();
@@ -752,7 +763,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralMorphingAudioProcessor
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>("temperature", "Temperature", R(0.1f, 2.0f, 0.01f), 0.47f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("threshold", "Threshold", R(0.1f, 2.0f, 0.01f), 0.55f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("threshold", "Threshold", R(0.1f, 2.0f, 0.01f), 0.99f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("continuity", "Continuity", R(0.0f, 1.0f, 0.01f), 0.93f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("rvqFocus", "RVQ Focus", R(0.0f, 1.0f, 0.01f), 0.30f));
     params.push_back(std::make_unique<juce::AudioParameterInt>("unit", "Unit", 1, 10, 7));
@@ -760,7 +771,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralMorphingAudioProcessor
     juce::StringArray swapModeChoices;
     swapModeChoices.add("Full Layer");
     swapModeChoices.add("RVQ Group");
-    params.push_back(std::make_unique<juce::AudioParameterChoice>("swapMode", "Swap Mode", swapModeChoices, 0));
+    swapModeChoices.add("Palette Only");
+    params.push_back(std::make_unique<juce::AudioParameterChoice>("swapMode", "Swap Mode", swapModeChoices, 2));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("similarity", "Similarity", R(0.0f, 1.0f, 0.01f), 0.8f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("envelopeFollow", "Envelope Follow", R(0.0f, 1.0f, 0.01f), 0.7f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("dryWet", "Dry/Wet", R(0.0f, 1.0f, 0.01f), 1.0f));
@@ -852,8 +864,11 @@ TokenBlock NeuralMorphingAudioProcessor::buildMatchedTokenBlock(const TokenBlock
 
     const int unit = juce::jmax(1, static_cast<int>(getParam("unit")));
     const int stride = juce::jmax(1, static_cast<int>(getParam("stride")));
-    const int swapMode = juce::jlimit(0, 1, static_cast<int>(std::lround(getParam("swapMode"))));
-    const bool useFullLayerSwap = (swapMode == 0);
+    const int swapMode = juce::jlimit(0, 2, static_cast<int>(std::lround(getParam("swapMode"))));
+    const bool usePaletteOnlySwap = (swapMode == 2);
+    const bool useFullLayerSwap = (swapMode == 0 || usePaletteOnlySwap);
+    if (usePaletteOnlySwap)
+        std::fill(result.tokens.begin(), result.tokens.end(), 0);
 
     if (targetBlock.frames < unit)
         return result;
@@ -1107,16 +1122,34 @@ TokenBlock NeuralMorphingAudioProcessor::buildMatchedTokenBlock(const TokenBlock
     for (size_t g = 0; g < grains.size(); ++g)
     {
         auto& grain = grains[g];
-        const int candidateIdx = path[g];
+        int candidateIdx = path[g];
         if (candidateIdx < 0 || static_cast<size_t>(candidateIdx) >= grain.candidates.size())
             continue;
+        if (usePaletteOnlySwap && grain.candidates.size() > 1)
+        {
+            int maxRank = juce::jmin(12, static_cast<int>(grain.candidates.size()) - 1);
+            int thresholdRank = 0;
+            for (const auto& candidate : grain.candidates)
+            {
+                if (candidate.emission > threshold)
+                    break;
+                ++thresholdRank;
+            }
+            if (thresholdRank > 0)
+                maxRank = juce::jmin(maxRank, thresholdRank - 1);
+
+            const float temperatureNorm = juce::jlimit(0.0f, 1.0f, (temperature - 0.1f) / 1.9f);
+            candidateIdx = juce::jlimit(0, static_cast<int>(grain.candidates.size()) - 1,
+                                        candidateIdx + static_cast<int>(std::lround(temperatureNorm * static_cast<float>(maxRank))));
+        }
 
         const auto& best = grain.candidates[static_cast<size_t>(candidateIdx)];
         lastMatchedIndex_.store(best.annIndex, std::memory_order_release);
         const bool fallbackCoarse = best.emission > threshold;
 
         const int startFrame = grain.startFrame;
-        const int span = juce::jmin(unit, result.frames - startFrame);
+        const int requestedSpan = (usePaletteOnlySwap && g + 1 == grains.size()) ? (result.frames - startFrame) : unit;
+        const int span = juce::jmin(requestedSpan, result.frames - startFrame);
         if (span <= 0)
             continue;
         const auto& bestMeta = paletteIndex_->meta(best.annIndex);
@@ -1124,9 +1157,6 @@ TokenBlock NeuralMorphingAudioProcessor::buildMatchedTokenBlock(const TokenBlock
 
         if (useFullLayerSwap)
         {
-            if (fallbackCoarse)
-                continue;
-
             for (int q = 0; q < codebooks; ++q)
             {
                 for (int offset = 0; offset < span; ++offset)
@@ -1138,7 +1168,7 @@ TokenBlock NeuralMorphingAudioProcessor::buildMatchedTokenBlock(const TokenBlock
                         if (srcIdx >= 0 && static_cast<size_t>(srcIdx) < bestBlock->tokens.size())
                             tokenValue = bestBlock->tokens[static_cast<size_t>(srcIdx)];
                     }
-                    else
+                    else if (!usePaletteOnlySwap)
                     {
                         const int fallbackIdx = targetBlock.index(q, startFrame + offset);
                         if (fallbackIdx >= 0 && static_cast<size_t>(fallbackIdx) < targetBlock.tokens.size())
@@ -1286,10 +1316,10 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
 
     const float similarity = juce::jlimit(0.0f, 1.0f, getParam("similarity"));
     const float dryWet = juce::jlimit(0.0f, 1.0f, getParam("dryWet"));
+    const bool fullWet = dryWet >= 0.999f;
     const float wetMix = juce::jlimit(0.0f, 1.0f, dryWet * wetAvailabilityMix_);
-    const float mixAngle = wetMix * juce::MathConstants<float>::halfPi;
-    const float dryGain = std::cos(mixAngle);
-    const float wetGain = std::sin(mixAngle);
+    const float dryGain = 1.0f - wetMix;
+    const float wetGain = wetMix;
     const bool qualityMode = selectedProcessingMode() == ProcessingMode::QualityParity;
     const float smoothingAmount = juce::jlimit(0.0f, 1.0f, getParam("envelopeFollow"));
 
@@ -1357,8 +1387,9 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
         {
             const float drySample = dryBuffer.getSample(dryCh, sample);
             const int morphLinearIndex = readStart + sample;
-            float morphSample = drySample;
-            if (morphLinearIndex < morphSamples)
+            const bool hasMorphSample = morphLinearIndex < morphSamples;
+            float morphSample = fullWet ? 0.0f : drySample;
+            if (hasMorphSample)
                 morphSample = morphed.getSample(morphCh, morphLinearIndex);
             morphSample *= morphLevelGain_;
             if (useSmoothing)
@@ -1372,7 +1403,7 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
             // Ensure Dry/Wet endpoints always reach true dry/true wet regardless of Similarity.
             if (dryWet <= 0.0f)
                 outputSample = drySample;
-            else if (dryWet >= 1.0f && wetAvailabilityMix_ >= 0.999f)
+            else if (fullWet)
                 outputSample = morphSample;
 
             buffer.setSample(ch, sample, outputSample);
@@ -1797,6 +1828,24 @@ void NeuralMorphingAudioProcessor::setBridgeCodec(int codecType)
     initialiseBackend();
     configureRealtimeTimings();
     createWorkers();
+}
+
+void NeuralMorphingAudioProcessor::applyDacDemoDefaults()
+{
+    if (selectedCodecId() != "dac")
+        return;
+
+    if (auto* p = dynamic_cast<juce::AudioParameterFloat*>(parameters.getParameter("threshold")))
+    {
+        if (p->get() < kDacDefaults.threshold)
+            *p = kDacDefaults.threshold;
+    }
+
+    if (auto* p = dynamic_cast<juce::AudioParameterChoice*>(parameters.getParameter("swapMode")))
+    {
+        if (p->getIndex() < kDacDefaults.swapMode)
+            *p = kDacDefaults.swapMode;
+    }
 }
 
 void NeuralMorphingAudioProcessor::setProcessingMode(int modeType)

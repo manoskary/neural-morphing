@@ -90,63 +90,25 @@ void PaletteWorker::processFiles()
     if (rebuild)
         index_.clear();
 
-    index_.prepareForSamples(static_cast<int>(files.size()));
+    constexpr int variantsPerFile = 3;
+    index_.prepareForSamples(static_cast<int>(files.size()) * variantsPerFile);
     index_.setGrainConfig(unit, stride);
 
     {
         const juce::ScopedLock lock(stateMutex_);
-        statusMessage_ = "Indexing " + juce::String(files.size()) + " target files";
+            statusMessage_ = "Indexing " + juce::String(files.size()) + " palette sounds";
     }
 
-    for (size_t i = 0; i < files.size(); ++i)
+    int sampleId = 0;
+    auto indexPaletteVariant = [&](juce::AudioBuffer<float>& modelInput) -> bool
     {
-        if (threadShouldExit())
-            break;
-
-        auto file = files[i];
-        {
-            const juce::ScopedLock lock(stateMutex_);
-            statusMessage_ = "Indexing " + file.getFileName() + " (" + juce::String(i + 1) + "/" + juce::String(files.size()) + ")";
-        }
-        std::unique_ptr<juce::AudioFormatReader> reader(formatManager_.createReaderFor(file));
-        if (reader == nullptr)
-        {
-            const juce::ScopedLock lock(stateMutex_);
-            statusMessage_ = "Failed to read " + file.getFileName();
-            continue;
-        }
-
-        const juce::int64 length = static_cast<juce::int64>(reader->lengthInSamples);
-        if (length <= 0)
-            continue;
-
-        juce::AudioBuffer<float> tempBuffer(static_cast<int>(reader->numChannels), static_cast<int>(length));
-        reader->read(&tempBuffer, 0, static_cast<int>(length), 0, true, true);
-
-        const int requiredChannels = juce::jmax(1, backend_.requiredInputChannels());
-        juce::AudioBuffer<float> modelInput(requiredChannels, static_cast<int>(length));
-        modelInput.clear();
-
-        if (requiredChannels == 1)
-        {
-            for (int ch = 0; ch < tempBuffer.getNumChannels(); ++ch)
-                modelInput.addFrom(0, 0, tempBuffer, ch, 0, static_cast<int>(length), 1.0f / static_cast<float>(tempBuffer.getNumChannels()));
-        }
-        else
-        {
-            const int srcChannels = juce::jmax(1, tempBuffer.getNumChannels());
-            for (int ch = 0; ch < requiredChannels; ++ch)
-            {
-                const int srcCh = juce::jmin(ch, srcChannels - 1);
-                modelInput.copyFrom(ch, 0, tempBuffer, srcCh, 0, static_cast<int>(length));
-            }
-        }
-
         auto tokens = backend_.encodePCM(modelInput);
         if (tokens.empty())
-            continue;
+            return false;
 
-        index_.setTokenBlock(static_cast<int>(i), tokens);
+        const int currentSampleId = sampleId++;
+        index_.setTokenBlock(currentSampleId, tokens);
+
         std::vector<std::vector<float>> frameVectors;
         const bool hasFrameVectors = backend_.tokensToVectorRows(tokens, 0, tokens.frames, frameVectors)
                                      && static_cast<int>(frameVectors.size()) == tokens.frames;
@@ -182,9 +144,66 @@ void PaletteWorker::processFiles()
                 value *= invUnit;
 
             PaletteMeta meta;
-            meta.sampleId = static_cast<int>(i);
+            meta.sampleId = currentSampleId;
             meta.frame = frame;
             index_.add(pooled, meta);
+        }
+
+        return true;
+    };
+
+    for (size_t i = 0; i < files.size(); ++i)
+    {
+        if (threadShouldExit())
+            break;
+
+        auto file = files[i];
+        {
+            const juce::ScopedLock lock(stateMutex_);
+            statusMessage_ = "Indexing palette sound " + file.getFileName() + " (" + juce::String(i + 1) + "/" + juce::String(files.size()) + ")";
+        }
+        std::unique_ptr<juce::AudioFormatReader> reader(formatManager_.createReaderFor(file));
+        if (reader == nullptr)
+        {
+            const juce::ScopedLock lock(stateMutex_);
+            statusMessage_ = "Failed to read " + file.getFileName();
+            continue;
+        }
+
+        const juce::int64 length = static_cast<juce::int64>(reader->lengthInSamples);
+        if (length <= 0)
+            continue;
+
+        juce::AudioBuffer<float> tempBuffer(static_cast<int>(reader->numChannels), static_cast<int>(length));
+        reader->read(&tempBuffer, 0, static_cast<int>(length), 0, true, true);
+
+        const int requiredChannels = juce::jmax(1, backend_.requiredInputChannels());
+        juce::AudioBuffer<float> modelInput(requiredChannels, static_cast<int>(length));
+        modelInput.clear();
+
+        if (requiredChannels == 1)
+        {
+            for (int ch = 0; ch < tempBuffer.getNumChannels(); ++ch)
+                modelInput.addFrom(0, 0, tempBuffer, ch, 0, static_cast<int>(length), 1.0f / static_cast<float>(tempBuffer.getNumChannels()));
+        }
+        else
+        {
+            const int srcChannels = juce::jmax(1, tempBuffer.getNumChannels());
+            for (int ch = 0; ch < requiredChannels; ++ch)
+            {
+                const int srcCh = juce::jmin(ch, srcChannels - 1);
+                modelInput.copyFrom(ch, 0, tempBuffer, srcCh, 0, static_cast<int>(length));
+            }
+        }
+
+        indexPaletteVariant(modelInput);
+
+        for (float gain : { 0.7f, 0.3f })
+        {
+            juce::AudioBuffer<float> augmented;
+            augmented.makeCopyOf(modelInput, true);
+            augmented.applyGain(gain);
+            indexPaletteVariant(augmented);
         }
 
         progress_.store(static_cast<double>(i + 1) / static_cast<double>(files.size()), std::memory_order_release);

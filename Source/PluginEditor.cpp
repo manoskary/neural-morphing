@@ -229,16 +229,13 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
 
     swapModeSelector_.addItem("Full Layer", 1);
     swapModeSelector_.addItem("RVQ Group", 2);
+    swapModeSelector_.addItem("Palette Only", 3);
     swapModeAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor_.parameters, "swapMode", swapModeSelector_);
     
-    backendLabel_.attachToComponent(&backendSelector_, true);
-    backendLabel_.setColour(juce::Label::textColourId, textGrey);
-    processingModeLabel_.attachToComponent(&processingModeSelector_, true);
-    processingModeLabel_.setColour(juce::Label::textColourId, textGrey);
-    bridgeCodecLabel_.attachToComponent(&bridgeCodecSelector_, true);
-    bridgeCodecLabel_.setColour(juce::Label::textColourId, textGrey);
-    swapModeLabel_.attachToComponent(&swapModeSelector_, true);
-    swapModeLabel_.setColour(juce::Label::textColourId, textGrey);
+    backendLabel_.setVisible(false);
+    processingModeLabel_.setVisible(false);
+    bridgeCodecLabel_.setVisible(false);
+    swapModeLabel_.setVisible(false);
     statusDisplayLabel_.setJustificationType(juce::Justification::centredLeft);
     statusDisplayLabel_.setColour(juce::Label::textColourId, neonGreen.withAlpha(0.8f));
 
@@ -264,6 +261,14 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     processingModeSelector_.addListener(this);
     bridgeCodecSelector_.addListener(this);
     swapModeSelector_.addListener(this);
+    temperatureSlider_.addListener(this);
+    thresholdSlider_.addListener(this);
+    continuitySlider_.addListener(this);
+    rvqFocusSlider_.addListener(this);
+    unitSlider_.addListener(this);
+    strideSlider_.addListener(this);
+    similaritySlider_.addListener(this);
+    envelopeSlider_.addListener(this);
 
     startTimerHz(10);
 }
@@ -281,6 +286,14 @@ NeuralMorphingAudioProcessorEditor::~NeuralMorphingAudioProcessorEditor()
     processingModeSelector_.removeListener(this);
     bridgeCodecSelector_.removeListener(this);
     swapModeSelector_.removeListener(this);
+    temperatureSlider_.removeListener(this);
+    thresholdSlider_.removeListener(this);
+    continuitySlider_.removeListener(this);
+    rvqFocusSlider_.removeListener(this);
+    unitSlider_.removeListener(this);
+    strideSlider_.removeListener(this);
+    similaritySlider_.removeListener(this);
+    envelopeSlider_.removeListener(this);
 }
 
 void NeuralMorphingAudioProcessorEditor::paint(juce::Graphics& g)
@@ -551,7 +564,7 @@ void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
         juce::String initialPath = lastDirectory_.exists() ? lastDirectory_.getFullPathName() : juce::File::getSpecialLocation(juce::File::userHomeDirectory).getFullPathName();
         
         // Use the asynchronous version for better compatibility
-        auto chooser = std::make_unique<juce::FileChooser>("Select target palette audio", juce::File(initialPath), "*.wav;*.flac;*.mp3;*.aiff;*.ogg");
+        auto chooser = std::make_unique<juce::FileChooser>("Select palette sounds", juce::File(initialPath), "*.wav;*.flac;*.mp3;*.aiff;*.ogg");
         chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems,
                            [this, chooserPtr = chooser.get()](const juce::FileChooser& fc)
                            {
@@ -616,7 +629,7 @@ void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
     else if (button == &loadSourceButton_)
     {
         juce::String initialPath = lastDirectory_.exists() ? lastDirectory_.getFullPathName() : juce::File::getSpecialLocation(juce::File::userHomeDirectory).getFullPathName();
-        auto chooser = std::make_unique<juce::FileChooser>("Select source audio", juce::File(initialPath), "*.wav;*.flac;*.mp3;*.aiff;*.ogg");
+        auto chooser = std::make_unique<juce::FileChooser>("Select source sound", juce::File(initialPath), "*.wav;*.flac;*.mp3;*.aiff;*.ogg");
         chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                              [this, chooserPtr = chooser.get()](const juce::FileChooser& fc)
                              {
@@ -686,6 +699,26 @@ void NeuralMorphingAudioProcessorEditor::comboBoxChanged(juce::ComboBox* comboBo
     else if (comboBox == &swapModeSelector_)
     {
         processor_.invalidateMorphCache();
+    }
+}
+
+void NeuralMorphingAudioProcessorEditor::sliderValueChanged(juce::Slider* slider)
+{
+    if (slider == &similaritySlider_ || slider == &envelopeSlider_ || slider == &dryWetSlider_ || slider == &outputSlider_)
+        return;
+    processor_.invalidateMorphCache();
+}
+
+void NeuralMorphingAudioProcessorEditor::sliderDragEnded(juce::Slider* slider)
+{
+    if ((slider == &unitSlider_ || slider == &strideSlider_) && !lastFiles_.empty())
+    {
+        if (auto* worker = processor_.getPaletteWorker())
+        {
+            worker->requestBuild(lastFiles_, true,
+                                 static_cast<int>(unitSlider_.getValue()),
+                                 static_cast<int>(strideSlider_.getValue()));
+        }
     }
 }
 

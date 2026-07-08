@@ -30,9 +30,10 @@ private:
 class NeuralMorphingAudioProcessor;
 
 class NeuralMorphingAudioProcessorEditor : public juce::AudioProcessorEditor,
-                                           private juce::Button::Listener,
-                                           private juce::ComboBox::Listener,
-                                           private juce::Timer
+                                            private juce::Button::Listener,
+                                            private juce::ComboBox::Listener,
+                                            private juce::Slider::Listener,
+                                            private juce::Timer
 {
 public:
     explicit NeuralMorphingAudioProcessorEditor(NeuralMorphingAudioProcessor&);
@@ -45,6 +46,8 @@ public:
 private:
     void buttonClicked(juce::Button*) override;
     void comboBoxChanged(juce::ComboBox*) override;
+    void sliderValueChanged(juce::Slider*) override;
+    void sliderDragEnded(juce::Slider*) override;
     void timerCallback() override;
     void setupSlider(juce::Slider& slider, const juce::String& name);
     juce::Rectangle<int> calculateLogoBounds() const;
@@ -55,10 +58,10 @@ private:
 
     static constexpr bool showLayoutDebug_ = false;
 
-    juce::TextButton loadButton_{ "Add Target Files" };
+    juce::TextButton loadButton_{ "Add Palette Sounds" };
     juce::TextButton clearButton_{ "Clear Palette" };
     juce::TextButton rebuildButton_{ "Rebuild" };
-    juce::TextButton loadSourceButton_{ "Load Source Audio" };
+    juce::TextButton loadSourceButton_{ "Load Source Sound" };
     juce::TextButton clearSourceButton_{ "Clear Source" };
 
     juce::Label statusLabel_;

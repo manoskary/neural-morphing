@@ -116,6 +116,7 @@ private:
     ProcessingMode selectedProcessingMode() const;
     BackendPolicy selectedBackendPolicy() const;
     juce::String selectedCodecId() const;
+    void applyDacDemoDefaults();
     void updateWetAvailability(bool wetAvailable, int numSamples);
     juce::String backendKindToString(ActiveBackendKind kind) const;
     juce::String processingModeToString(ProcessingMode mode) const;

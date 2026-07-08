@@ -458,6 +458,7 @@ class LatentGranularSynthesis:
     SWAP_ALIASES = {
         "full_layer": "full_layer_gated",
         "rvq_group": "rvq_group_current",
+        "palette_only": "full_layer_forced",
     }
     SWAP_MODES = {
         "identity",
@@ -559,7 +560,7 @@ class LatentGranularSynthesis:
         self.candidate_count = 96
         self.beam_width = 12
         self.match_mode = "beam"
-        self.swap_mode = "full_layer_gated"
+        self.swap_mode = "full_layer_forced"
         self._apply_codec_defaults("dac")
         self.last_timings = {"encode_ms": 0.0, "decode_ms": 0.0, "total_ms": 0.0}
         self.last_sequence_diagnostics = {}
@@ -1149,6 +1150,7 @@ class LatentGranularSynthesis:
         self.swap_mode = swap_mode
 
     def build_dataset(self, files, aug_checkbox: bool):
+        aug_checkbox = True
         resolved_files = self._materialize_files(files)
         if not resolved_files:
             return "Please upload at least one audio file before building the palette."
@@ -1405,7 +1407,7 @@ class LatentGranularSynthesis:
         if self.palette_codes is None or self.palette_codes.numel() == 0:
             return _fallback()
 
-        print("Creating codes for target audio")
+        print("Creating codes for source audio")
         target_segments = []
         encode_started = time.perf_counter()
 
@@ -1727,7 +1729,7 @@ def topk(top_k):
 def load_demo_example(example_name):
     for name, sources, target in _available_demo_examples():
         if name == example_name:
-            return sources, False, target, f"Loaded example: {name}."
+            return sources, True, target, f"Loaded example: {name}."
     return gr.update(), gr.update(), gr.update(), "Example files are missing."
 
 
@@ -1773,7 +1775,7 @@ def _build_demo():
     defaults = LatentGranularSynthesis.DAC_DEFAULTS
     codec_id = "dac"
     match_mode = "beam"
-    swap_mode = "full_layer_gated"
+    swap_mode = "palette_only"
     with gr.Blocks(
         elem_id="neural-morphing-app",
         fill_width=True,
@@ -1786,8 +1788,8 @@ def _build_demo():
         gr.HTML(HERO_HTML)
         with gr.Row(elem_classes=["nm-main-grid"]):
             with gr.Column(scale=4, min_width=320, elem_classes=["nm-panel"]):
-                gr.Markdown("### Source Palette")
-                db_file = gr.File(file_count="multiple", label="Source Sounds")
+                gr.Markdown("### Palette Sounds")
+                db_file = gr.File(file_count="multiple", label="Palette Sounds")
                 if example_names:
                     with gr.Row(elem_classes=["nm-example-row"]):
                         example_dropdown = gr.Dropdown(
@@ -1802,8 +1804,8 @@ def _build_demo():
                             scale=1,
                             min_width=120,
                         )
-                aug_checkbox = gr.Checkbox(label="Apply Augmentation")
-                b1 = gr.Button("Process source sounds", elem_classes=["nm-secondary"])
+                aug_checkbox = gr.Checkbox(label="Palette Augmentation", value=True, visible=False)
+                b1 = gr.Button("Process palette sounds", elem_classes=["nm-secondary"])
                 text = gr.Textbox(label="Result")
 
             with gr.Column(scale=6, min_width=360, elem_classes=["nm-panel"]):
@@ -1821,6 +1823,7 @@ def _build_demo():
                     )
                     swap_mode_dropdown = gr.Dropdown(
                         choices=[
+                            "palette_only",
                             "full_layer_gated",
                             "rvq_group_current",
                             "full_layer_forced",
@@ -1835,7 +1838,7 @@ def _build_demo():
                         label="Swap Mode",
                     )
 
-                target_file = gr.File(label="Target sound")
+                target_file = gr.File(label="Source Sound")
 
                 with gr.Row():
                     temp_slider = gr.Slider(0.1, 2.0, value=defaults["temperature"], label="Temperature")
