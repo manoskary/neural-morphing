@@ -53,6 +53,7 @@ private:
     juce::Rectangle<int> calculateLogoBounds() const;
     void buildPaletteFromFiles(const std::vector<juce::File>& files);
     bool loadStandaloneSourceFile(const juce::File& file);
+    void applyStandaloneDemoParametersFromEnvironment();
     void autoloadStandaloneDemoFilesFromEnvironment();
 
     NeuralMorphingAudioProcessor& processor_;
@@ -115,6 +116,8 @@ private:
     std::vector<juce::File> lastFiles_;
     bool showStandaloneSource_ = false;
     juce::AudioFormatManager formatManager_;
+    juce::File demoStatusFile_;
+    juce::String lastDemoStatusText_;
 
     juce::Image backgroundImage_;
     juce::Image logoImage_;

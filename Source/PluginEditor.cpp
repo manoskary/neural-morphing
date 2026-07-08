@@ -24,6 +24,16 @@ std::vector<juce::File> filesFromEnvList(const juce::String& value)
     }
     return files;
 }
+
+void setFloatParamFromEnv(juce::AudioProcessorValueTreeState& params, const char* envName, const char* paramId)
+{
+    const auto value = juce::SystemStats::getEnvironmentVariable(envName, {});
+    if (value.isEmpty())
+        return;
+
+    if (auto* param = dynamic_cast<juce::AudioParameterFloat*>(params.getParameter(paramId)))
+        *param = value.getFloatValue();
+}
 }
 
 NeuralMorphingLookAndFeel::NeuralMorphingLookAndFeel()
@@ -368,6 +378,12 @@ void NeuralMorphingAudioProcessorEditor::autoloadStandaloneDemoFilesFromEnvironm
     if (!showStandaloneSource_)
         return;
 
+    applyStandaloneDemoParametersFromEnvironment();
+
+    const auto statusValue = juce::SystemStats::getEnvironmentVariable("NEURAL_MORPHING_DEMO_STATUS_FILE", {});
+    if (statusValue.isNotEmpty())
+        demoStatusFile_ = juce::File(statusValue.trim().unquoted());
+
     const auto paletteValue = juce::SystemStats::getEnvironmentVariable("NEURAL_MORPHING_DEMO_PALETTE_FILES", {});
     if (paletteValue.isNotEmpty())
         buildPaletteFromFiles(filesFromEnvList(paletteValue));
@@ -375,6 +391,14 @@ void NeuralMorphingAudioProcessorEditor::autoloadStandaloneDemoFilesFromEnvironm
     const auto sourceValue = juce::SystemStats::getEnvironmentVariable("NEURAL_MORPHING_DEMO_SOURCE_FILE", {});
     if (sourceValue.isNotEmpty())
         loadStandaloneSourceFile(juce::File(sourceValue.trim().unquoted()));
+}
+
+void NeuralMorphingAudioProcessorEditor::applyStandaloneDemoParametersFromEnvironment()
+{
+    setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_TEMPERATURE", "temperature");
+    setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_THRESHOLD", "threshold");
+    setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_CONTINUITY", "continuity");
+    setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_RVQ_FOCUS", "rvqFocus");
 }
 
 void NeuralMorphingAudioProcessorEditor::paint(juce::Graphics& g)
@@ -785,6 +809,11 @@ void NeuralMorphingAudioProcessorEditor::timerCallback()
     // Update backend status
     juce::String backendStatus = processor_.getBackendStatus();
     statusDisplayLabel_.setText(backendStatus, juce::dontSendNotification);
+    if (demoStatusFile_ != juce::File{} && backendStatus != lastDemoStatusText_)
+    {
+        demoStatusFile_.replaceWithText(backendStatus);
+        lastDemoStatusText_ = backendStatus;
+    }
 
     if (showStandaloneSource_)
     {

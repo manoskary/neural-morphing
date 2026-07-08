@@ -51,10 +51,12 @@ Optional Standalone smoke-test preload:
 ```powershell
 $env:NEURAL_MORPHING_DEMO_PALETTE_FILES="C:\path\palette_a.wav;C:\path\palette_b.wav"
 $env:NEURAL_MORPHING_DEMO_SOURCE_FILE="C:\path\source.wav"
+$env:NEURAL_MORPHING_DEMO_STATUS_FILE="C:\path\status.txt"
 & ".\build-bridge\NeuralMorphing_artefacts\Release\Standalone\Neural Morphing.exe"
 ```
 
 When the bridge and palette are ready, the status line should show `wet=ready` and `tok=NN%`.
+For control-sweep smoke tests, set `NEURAL_MORPHING_DEMO_TEMPERATURE`, `NEURAL_MORPHING_DEMO_THRESHOLD`, `NEURAL_MORPHING_DEMO_CONTINUITY`, or `NEURAL_MORPHING_DEMO_RVQ_FOCUS` before launching and compare the `sig=...` value in the status file.
 
 Attempt the native ONNX build only when ONNX Runtime is installed and discoverable by CMake:
 

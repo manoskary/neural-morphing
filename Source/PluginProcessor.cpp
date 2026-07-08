@@ -137,6 +137,23 @@ int tokenChangePercent(const TokenBlock& source, const TokenBlock& morphed)
     return static_cast<int>(std::lround(100.0 * static_cast<double>(changed) / static_cast<double>(count)));
 }
 
+uint32_t audioFingerprint(const juce::AudioBuffer<float>& audio)
+{
+    uint32_t hash = 2166136261u;
+    for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+    {
+        const auto* data = audio.getReadPointer(ch);
+        for (int i = 0; i < audio.getNumSamples(); ++i)
+        {
+            const auto q = static_cast<uint32_t>(static_cast<int16_t>(
+                std::lround(juce::jlimit(-1.0f, 1.0f, data[i]) * 32767.0f)));
+            hash ^= q;
+            hash *= 16777619u;
+        }
+    }
+    return hash;
+}
+
 constexpr const char* morphTokenParameterIds[] = {
     "temperature",
     "threshold",
@@ -347,6 +364,7 @@ void NeuralMorphingAudioProcessor::clearRealtimeSessionState(bool clearHistoryBu
     wetMixPercent_.store(0, std::memory_order_release);
     morphWetState_.store(0, std::memory_order_release);
     morphTokenChangePercent_.store(-1, std::memory_order_release);
+    morphAudioFingerprint_.store(0, std::memory_order_release);
 
     const juce::ScopedLock taskLock(realtimeTaskMutex_);
     hasPendingRealtimeTask_ = false;
@@ -1720,6 +1738,8 @@ void NeuralMorphingAudioProcessor::processRealtimeMorphTask(juce::AudioBuffer<fl
         qualityTailValid_ = false;
     }
 
+    morphAudioFingerprint_.store(audioFingerprint(morphedAudio), std::memory_order_release);
+
     if (!decodedFifo_.push(std::move(morphedAudio)))
     {
         juce::AudioBuffer<float> dropped;
@@ -1931,13 +1951,16 @@ juce::String NeuralMorphingAudioProcessor::getBackendStatus() const
 
     const int tokenChange = morphTokenChangePercent_.load(std::memory_order_acquire);
     juce::String tokenChangeText = tokenChange >= 0 ? juce::String(tokenChange) + "%" : "--";
+    const auto fingerprint = morphAudioFingerprint_.load(std::memory_order_acquire);
+    juce::String fingerprintText = fingerprint != 0 ? juce::String::toHexString(static_cast<int>(fingerprint)) : "--";
 
     juce::String status = backendKindToString(activeBackendKind_)
                           + " | " + backendPolicyToString(selectedBackendPolicy())
                           + " | " + processingModeToString(selectedProcessingMode())
-                          + " | codec=" + selectedCodecId()
+                          + " | " + selectedCodecId()
                           + " | wet=" + wetState + " " + juce::String(wetMixPercent_.load(std::memory_order_acquire)) + "%"
-                          + " | tok=" + tokenChangeText;
+                          + " | tok=" + tokenChangeText
+                          + " | sig=" + fingerprintText;
 
 #if NM_WITH_PYBRIDGE
     if (auto* httpBackend = dynamic_cast<ModelBackendHttp*>(backend_.get()))
@@ -1948,8 +1971,6 @@ juce::String NeuralMorphingAudioProcessor::getBackendStatus() const
     }
 #endif
 
-    if (backendFallbackReason_.isNotEmpty())
-        status += " | fb";
     return status;
 }
 
