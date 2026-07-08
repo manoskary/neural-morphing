@@ -466,18 +466,18 @@ void NeuralMorphingAudioProcessorEditor::resized()
     // Backend policy + processing mode row.
     juce::Rectangle<int> backendArea(controlsX, currentY, controlsWidth, 32);
     constexpr int comboGap = 12;
-    const int policyWidth = juce::jmax(260, juce::jmin(380, (backendArea.getWidth() - comboGap) / 2));
+    const int policyWidth = juce::jmax(1, (backendArea.getWidth() - comboGap) / 2);
     backendSelector_.setBounds(backendArea.removeFromLeft(policyWidth).reduced(2));
     backendArea.removeFromLeft(comboGap);
-    processingModeSelector_.setBounds(backendArea.removeFromLeft(policyWidth).reduced(2));
+    processingModeSelector_.setBounds(backendArea.reduced(2));
     currentY += 32 + 4;
 
     // Codec + swap row (side-by-side, intentionally not under backend policy).
     juce::Rectangle<int> codecSwapArea(controlsX, currentY, controlsWidth, 32);
-    const int comboWidth = juce::jmax(180, juce::jmin(260, (codecSwapArea.getWidth() - comboGap) / 2));
+    const int comboWidth = juce::jmax(1, (codecSwapArea.getWidth() - comboGap) / 2);
     bridgeCodecSelector_.setBounds(codecSwapArea.removeFromLeft(comboWidth).reduced(2));
     codecSwapArea.removeFromLeft(comboGap);
-    swapModeSelector_.setBounds(codecSwapArea.removeFromLeft(comboWidth).reduced(2));
+    swapModeSelector_.setBounds(codecSwapArea.reduced(2));
     currentY += 32 + 4;
 
     // Backend status row
@@ -689,24 +689,17 @@ void NeuralMorphingAudioProcessorEditor::comboBoxChanged(juce::ComboBox* comboBo
     {
         int modeIndex = processingModeSelector_.getSelectedItemIndex();
         processor_.setProcessingMode(modeIndex);
-        processor_.invalidateMorphCache();
     }
     else if (comboBox == &bridgeCodecSelector_)
     {
         int codecIndex = bridgeCodecSelector_.getSelectedItemIndex();
         processor_.setBridgeCodec(codecIndex);
     }
-    else if (comboBox == &swapModeSelector_)
-    {
-        processor_.invalidateMorphCache();
-    }
 }
 
 void NeuralMorphingAudioProcessorEditor::sliderValueChanged(juce::Slider* slider)
 {
-    if (slider == &similaritySlider_ || slider == &envelopeSlider_ || slider == &dryWetSlider_ || slider == &outputSlider_)
-        return;
-    processor_.invalidateMorphCache();
+    juce::ignoreUnused(slider);
 }
 
 void NeuralMorphingAudioProcessorEditor::sliderDragEnded(juce::Slider* slider)

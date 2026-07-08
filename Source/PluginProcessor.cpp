@@ -121,6 +121,17 @@ NeuralMorphingAudioProcessor::BackendPolicy backendPolicyFromParam(int value)
         return NeuralMorphingAudioProcessor::BackendPolicy::NativeOnly;
     return NeuralMorphingAudioProcessor::BackendPolicy::NativePreferredBridgeFallback;
 }
+
+constexpr const char* morphTokenParameterIds[] = {
+    "temperature",
+    "threshold",
+    "continuity",
+    "rvqFocus",
+    "unit",
+    "stride",
+    "swapMode",
+    "processingMode"
+};
 }
 
 NeuralMorphingAudioProcessor::NeuralMorphingAudioProcessor()
@@ -137,6 +148,9 @@ NeuralMorphingAudioProcessor::NeuralMorphingAudioProcessor()
     liveBeamWidth_ = getEnvIntClamped("NEURAL_MORPHING_LIVE_BEAM", kLiveBeamWidthDefault, 1, matchBeamWidth);
 
     applyDacDemoDefaults();
+    for (const auto* parameterId : morphTokenParameterIds)
+        parameters.addParameterListener(parameterId, this);
+
     initialiseBackend();
     configureRealtimeTimings();
     createWorkers();
@@ -146,6 +160,9 @@ NeuralMorphingAudioProcessor::NeuralMorphingAudioProcessor()
 
 NeuralMorphingAudioProcessor::~NeuralMorphingAudioProcessor()
 {
+    for (const auto* parameterId : morphTokenParameterIds)
+        parameters.removeParameterListener(parameterId, this);
+
     shutdownWorkers();
 }
 
@@ -312,6 +329,8 @@ void NeuralMorphingAudioProcessor::clearRealtimeSessionState(bool clearHistoryBu
     qualityTailBuffer_.clear();
     qualityTailValid_ = false;
     wetAvailabilityMix_ = 0.0f;
+    wetMixPercent_.store(0, std::memory_order_release);
+    morphWetState_.store(0, std::memory_order_release);
 
     const juce::ScopedLock taskLock(realtimeTaskMutex_);
     hasPendingRealtimeTask_ = false;
@@ -347,6 +366,7 @@ void NeuralMorphingAudioProcessor::updateWetAvailability(bool wetAvailable, int 
     if (currentSampleRate_ <= 0.0)
     {
         wetAvailabilityMix_ = wetAvailable ? 1.0f : 0.0f;
+        wetMixPercent_.store(static_cast<int>(std::lround(getParam("dryWet") * wetAvailabilityMix_ * 100.0f)), std::memory_order_release);
         return;
     }
 
@@ -358,6 +378,7 @@ void NeuralMorphingAudioProcessor::updateWetAvailability(bool wetAvailable, int 
         wetAvailabilityMix_ = juce::jmin(1.0f, wetAvailabilityMix_ + step);
     else
         wetAvailabilityMix_ = juce::jmax(0.0f, wetAvailabilityMix_ - step);
+    wetMixPercent_.store(static_cast<int>(std::lround(getParam("dryWet") * wetAvailabilityMix_ * 100.0f)), std::memory_order_release);
 }
 
 juce::String NeuralMorphingAudioProcessor::backendKindToString(ActiveBackendKind kind) const
@@ -456,6 +477,8 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
 
     if (resetSmoothingPending_.exchange(false, std::memory_order_acq_rel))
         resetMorphSmoothing();
+    if (morphCacheInvalidationPending_.exchange(false, std::memory_order_acq_rel))
+        invalidateMorphCache();
 
     if (isStandaloneWrapper())
         renderStandaloneSource(buffer);
@@ -469,6 +492,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
     if (dryWet <= 0.0f)
     {
         clearRealtimeSessionState(true);
+        morphWetState_.store(4, std::memory_order_release);
 
         const float outputGain = juce::Decibels::decibelsToGain(getParam("outputGain"));
         buffer.applyGain(outputGain);
@@ -507,6 +531,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
             if (isSilent(backendInputScratch_))
                 targetSegments_.clear();
             clearRealtimeSessionState(true);
+            morphWetState_.store(0, std::memory_order_release);
             if (fullWet)
                 buffer.clear();
         }
@@ -534,6 +559,8 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
                     {
                         const auto& encodeInput = selectRealtimeEncodeInput(backendInputScratch_);
                         queueRealtimeMorphTask(encodeInput);
+                        if (!hasLastRealtimeMorphBlock_)
+                            morphWetState_.store(1, std::memory_order_release);
                     }
                 }
 
@@ -553,11 +580,13 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
                     const bool enoughWetSamples = lastRealtimeMorphReadPosition_ + numSamples <= lastRealtimeMorphBlock_.getNumSamples();
                     if (!enoughWetSamples)
                         lastRealtimeMorphWasUnderrun_ = true;
+                    morphWetState_.store(lastRealtimeMorphWasUnderrun_ ? 3 : 2, std::memory_order_release);
                     updateWetAvailability(!lastRealtimeMorphWasUnderrun_, numSamples);
                     mixMorphedAudio(buffer, dryBuffer, lastRealtimeMorphBlock_);
                 }
                 else
                 {
+                    morphWetState_.store(1, std::memory_order_release);
                     updateWetAvailability(false, numSamples);
                     if (fullWet)
                         buffer.clear();
@@ -566,6 +595,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
             else
             {
                 clearRealtimeSessionState(true);
+                morphWetState_.store(4, std::memory_order_release);
                 if (fullWet)
                     buffer.clear();
             }
@@ -573,6 +603,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
     }
     else
     {
+        morphWetState_.store(0, std::memory_order_release);
         updateWetAvailability(false, numSamples);
         if (fullWet)
             buffer.clear();
@@ -618,6 +649,11 @@ float NeuralMorphingAudioProcessor::getParam(const juce::String& paramID) const
     if (auto* value = parameters.getRawParameterValue(paramID))
         return *value;
     return 0.0f;
+}
+
+void NeuralMorphingAudioProcessor::parameterChanged(const juce::String&, float)
+{
+    morphCacheInvalidationPending_.store(true, std::memory_order_release);
 }
 
 void NeuralMorphingAudioProcessor::setStandaloneSource(juce::AudioBuffer<float> buffer, double sampleRate, const juce::String& name)
@@ -1863,12 +1899,22 @@ juce::String NeuralMorphingAudioProcessor::getBackendStatus() const
     if (!backend_->ready())
         return "Backend not ready";
 
-    juce::String status = "backend=" + backendKindToString(activeBackendKind_)
-                          + " | policy=" + backendPolicyToString(selectedBackendPolicy())
-                          + " | mode=" + processingModeToString(selectedProcessingMode())
+    juce::String wetState = "missing";
+    switch (morphWetState_.load(std::memory_order_acquire))
+    {
+        case 1: wetState = "pending"; break;
+        case 2: wetState = "ready"; break;
+        case 3: wetState = "underrun"; break;
+        case 4: wetState = "bypass"; break;
+        default: break;
+    }
+
+    juce::String status = backendKindToString(activeBackendKind_)
+                          + " | " + backendPolicyToString(selectedBackendPolicy())
+                          + " | " + processingModeToString(selectedProcessingMode())
                           + " | codec=" + selectedCodecId()
-                          + " | in=" + juce::String(backend_->requiredInputChannels()) + "ch"
-                          + " | latency=" + juce::String(currentLatencySamples_) + " samples";
+                          + " | wet=" + wetState + " " + juce::String(wetMixPercent_.load(std::memory_order_acquire)) + "%"
+                          + " | latency=" + juce::String(currentLatencySamples_);
 
 #if NM_WITH_PYBRIDGE
     if (auto* httpBackend = dynamic_cast<ModelBackendHttp*>(backend_.get()))

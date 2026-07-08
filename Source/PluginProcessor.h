@@ -13,7 +13,8 @@
 #include "OnsetDetector.h"
 #include "Workers.h"
 
-class NeuralMorphingAudioProcessor : public juce::AudioProcessor
+class NeuralMorphingAudioProcessor : public juce::AudioProcessor,
+                                     private juce::AudioProcessorValueTreeState::Listener
 {
 public:
     enum class ProcessingMode
@@ -68,6 +69,7 @@ public:
     //==============================================================================
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
+    void parameterChanged(const juce::String& parameterID, float newValue) override;
 
     float getParam(const juce::String& paramID) const;
 
@@ -170,6 +172,7 @@ private:
     int lastKnownProcessingModeParam_ = -1;
     std::vector<float> morphSmoothingState_;
     mutable juce::SpinLock morphCacheMutex_;
+    std::atomic<bool> morphCacheInvalidationPending_{ false };
     std::atomic<bool> resetSmoothingPending_{ false };
     std::atomic<int> lastMatchedIndex_{ -1 };
     int morphUpdateCountdownSamples_ = 0;
@@ -177,6 +180,8 @@ private:
     bool hasLastRealtimeMorphBlock_ = false;
     int lastRealtimeMorphReadPosition_ = 0;
     bool lastRealtimeMorphWasUnderrun_ = false;
+    std::atomic<int> morphWetState_{ 0 };
+    std::atomic<int> wetMixPercent_{ 0 };
     float morphLevelGain_ = 1.0f;
     float outputSafetyGain_ = 1.0f;
     float wetAvailabilityMix_ = 0.0f;
