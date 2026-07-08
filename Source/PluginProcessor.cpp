@@ -122,6 +122,21 @@ NeuralMorphingAudioProcessor::BackendPolicy backendPolicyFromParam(int value)
     return NeuralMorphingAudioProcessor::BackendPolicy::NativePreferredBridgeFallback;
 }
 
+int tokenChangePercent(const TokenBlock& source, const TokenBlock& morphed)
+{
+    const auto count = std::min(source.tokens.size(), morphed.tokens.size());
+    if (count == 0)
+        return -1;
+
+    size_t changed = 0;
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (source.tokens[i] != morphed.tokens[i])
+            ++changed;
+    }
+    return static_cast<int>(std::lround(100.0 * static_cast<double>(changed) / static_cast<double>(count)));
+}
+
 constexpr const char* morphTokenParameterIds[] = {
     "temperature",
     "threshold",
@@ -331,6 +346,7 @@ void NeuralMorphingAudioProcessor::clearRealtimeSessionState(bool clearHistoryBu
     wetAvailabilityMix_ = 0.0f;
     wetMixPercent_.store(0, std::memory_order_release);
     morphWetState_.store(0, std::memory_order_release);
+    morphTokenChangePercent_.store(-1, std::memory_order_release);
 
     const juce::ScopedLock taskLock(realtimeTaskMutex_);
     hasPendingRealtimeTask_ = false;
@@ -386,9 +402,9 @@ juce::String NeuralMorphingAudioProcessor::backendKindToString(ActiveBackendKind
     switch (kind)
     {
         case ActiveBackendKind::NativeOnnx:
-            return "native_dac";
+            return "native";
         case ActiveBackendKind::BridgeHttp:
-            return "python_bridge";
+            return "py";
         case ActiveBackendKind::Stub:
         default:
             return "stub";
@@ -397,7 +413,7 @@ juce::String NeuralMorphingAudioProcessor::backendKindToString(ActiveBackendKind
 
 juce::String NeuralMorphingAudioProcessor::processingModeToString(ProcessingMode mode) const
 {
-    return mode == ProcessingMode::QualityParity ? "quality_parity" : "live_realtime";
+    return mode == ProcessingMode::QualityParity ? "quality" : "live";
 }
 
 juce::String NeuralMorphingAudioProcessor::backendPolicyToString(BackendPolicy policy) const
@@ -405,12 +421,12 @@ juce::String NeuralMorphingAudioProcessor::backendPolicyToString(BackendPolicy p
     switch (policy)
     {
         case BackendPolicy::BridgeOnly:
-            return "bridge_only";
+            return "bridge";
         case BackendPolicy::NativeOnly:
-            return "native_only";
+            return "native";
         case BackendPolicy::NativePreferredBridgeFallback:
         default:
-            return "native_preferred_bridge_fallback";
+            return "native+bridge";
     }
 }
 
@@ -1627,6 +1643,7 @@ void NeuralMorphingAudioProcessor::processRealtimeMorphTask(juce::AudioBuffer<fl
             if (morphCache_.front().audio.getNumSamples() > 0)
             {
                 morphedAudio.makeCopyOf(morphCache_.front().audio);
+                morphTokenChangePercent_.store(morphCache_.front().tokenChangePercent, std::memory_order_release);
                 hasMorphedAudio = true;
             }
             break;
@@ -1642,14 +1659,17 @@ void NeuralMorphingAudioProcessor::processRealtimeMorphTask(juce::AudioBuffer<fl
         if (matchedTokens.tokens.empty() || matchedTokens.frames <= 0)
             return;
 
+        const int tokenChange = tokenChangePercent(targetTokens, matchedTokens);
         morphedAudio = backend_->decodeTokens(matchedTokens);
         if (morphedAudio.getNumChannels() <= 0 || morphedAudio.getNumSamples() <= 0)
             return;
+        morphTokenChangePercent_.store(tokenChange, std::memory_order_release);
 
         MorphCacheEntry entry;
         entry.hash = cacheKey;
         entry.matchedTokens = std::move(matchedTokens);
         entry.audio = morphedAudio;
+        entry.tokenChangePercent = tokenChange;
 
         const juce::SpinLock::ScopedLockType lock(morphCacheMutex_);
         morphCache_.insert(morphCache_.begin(), std::move(entry));
@@ -1909,24 +1929,27 @@ juce::String NeuralMorphingAudioProcessor::getBackendStatus() const
         default: break;
     }
 
+    const int tokenChange = morphTokenChangePercent_.load(std::memory_order_acquire);
+    juce::String tokenChangeText = tokenChange >= 0 ? juce::String(tokenChange) + "%" : "--";
+
     juce::String status = backendKindToString(activeBackendKind_)
                           + " | " + backendPolicyToString(selectedBackendPolicy())
                           + " | " + processingModeToString(selectedProcessingMode())
                           + " | codec=" + selectedCodecId()
                           + " | wet=" + wetState + " " + juce::String(wetMixPercent_.load(std::memory_order_acquire)) + "%"
-                          + " | latency=" + juce::String(currentLatencySamples_);
+                          + " | tok=" + tokenChangeText;
 
 #if NM_WITH_PYBRIDGE
     if (auto* httpBackend = dynamic_cast<ModelBackendHttp*>(backend_.get()))
     {
         juce::String error = httpBackend->getLastError();
         if (error.isNotEmpty())
-            status += " | bridge_error=" + error;
+            status += " | err";
     }
 #endif
 
     if (backendFallbackReason_.isNotEmpty())
-        status += " | fallback=" + backendFallbackReason_;
+        status += " | fb";
     return status;
 }
 

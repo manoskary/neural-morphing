@@ -154,6 +154,7 @@ private:
         uint64_t hash = 0;
         TokenBlock matchedTokens;
         juce::AudioBuffer<float> audio;
+        int tokenChangePercent = -1;
     };
 
     std::vector<MorphCacheEntry> morphCache_;
@@ -182,6 +183,7 @@ private:
     bool lastRealtimeMorphWasUnderrun_ = false;
     std::atomic<int> morphWetState_{ 0 };
     std::atomic<int> wetMixPercent_{ 0 };
+    std::atomic<int> morphTokenChangePercent_{ -1 };
     float morphLevelGain_ = 1.0f;
     float outputSafetyGain_ = 1.0f;
     float wetAvailabilityMix_ = 0.0f;
