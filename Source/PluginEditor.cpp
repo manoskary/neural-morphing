@@ -197,7 +197,7 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     setupSlider(rvqFocusSlider_, "RVQ Focus");
     setupSlider(unitSlider_, "Unit");
     setupSlider(strideSlider_, "Stride");
-    setupSlider(similaritySlider_, "Similarity");
+    setupSlider(similaritySlider_, "Wet Focus");
     setupSlider(envelopeSlider_, "Envelope");
     setupSlider(dryWetSlider_, "Dry/Wet");
     setupSlider(outputSlider_, "Output");
@@ -399,6 +399,7 @@ void NeuralMorphingAudioProcessorEditor::applyStandaloneDemoParametersFromEnviro
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_THRESHOLD", "threshold");
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_CONTINUITY", "continuity");
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_RVQ_FOCUS", "rvqFocus");
+    setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_WET_FOCUS", "similarity");
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_DRY_WET", "dryWet");
 }
 

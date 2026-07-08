@@ -365,6 +365,7 @@ void NeuralMorphingAudioProcessor::clearRealtimeSessionState(bool clearHistoryBu
     morphWetState_.store(0, std::memory_order_release);
     morphTokenChangePercent_.store(-1, std::memory_order_release);
     morphAudioFingerprint_.store(0, std::memory_order_release);
+    outputAudioFingerprint_.store(0, std::memory_order_release);
 
     const juce::ScopedLock taskLock(realtimeTaskMutex_);
     hasPendingRealtimeTask_ = false;
@@ -531,6 +532,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
         const float outputGain = juce::Decibels::decibelsToGain(getParam("outputGain"));
         buffer.applyGain(outputGain);
         applySafetyLimiter(buffer);
+        outputAudioFingerprint_.store(audioFingerprint(buffer), std::memory_order_release);
         return;
     }
 
@@ -649,6 +651,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
     const float outputGain = juce::Decibels::decibelsToGain(getParam("outputGain"));
     buffer.applyGain(outputGain);
     applySafetyLimiter(buffer);
+    outputAudioFingerprint_.store(audioFingerprint(buffer), std::memory_order_release);
 }
 
 juce::AudioProcessorEditor* NeuralMorphingAudioProcessor::createEditor()
@@ -846,7 +849,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralMorphingAudioProcessor
     swapModeChoices.add("RVQ Group");
     swapModeChoices.add("Palette Only");
     params.push_back(std::make_unique<juce::AudioParameterChoice>("swapMode", "Swap Mode", swapModeChoices, 2));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("similarity", "Similarity", R(0.0f, 1.0f, 0.01f), 0.8f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("similarity", "Wet Focus", R(0.0f, 1.0f, 0.01f), 0.8f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("envelopeFollow", "Envelope Follow", R(0.0f, 1.0f, 0.01f), 0.7f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("dryWet", "Dry/Wet", R(0.0f, 1.0f, 0.01f), 1.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("outputGain", "Output Gain (dB)", R(-24.0f, 24.0f, 0.1f), -3.0f));
@@ -1470,10 +1473,10 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
                 morphSample = (1.0f - smoothingAlpha) * morphSample + smoothingAlpha * prevSmoothed;
                 prevSmoothed = morphSample;
             }
-            const float blendedMorph = similarity * morphSample + (1.0f - similarity) * drySample;
-            float outputSample = dryGain * drySample + wetGain * blendedMorph;
+            morphSample *= juce::jmap(similarity, 0.65f, 1.15f);
+            float outputSample = dryGain * drySample + wetGain * morphSample;
 
-            // Ensure Dry/Wet endpoints always reach true dry/true wet regardless of Similarity.
+            // Dry/Wet is the source-to-palette volume crossfade; Wet Focus only colours the wet side.
             if (dryWet <= 0.0f)
                 outputSample = drySample;
             else if (fullWet)
@@ -1956,6 +1959,8 @@ juce::String NeuralMorphingAudioProcessor::getBackendStatus() const
     juce::String tokenChangeText = tokenChange >= 0 ? juce::String(tokenChange) + "%" : "--";
     const auto fingerprint = morphAudioFingerprint_.load(std::memory_order_acquire);
     juce::String fingerprintText = fingerprint != 0 ? juce::String::toHexString(static_cast<int>(fingerprint)) : "--";
+    const auto outputFingerprint = outputAudioFingerprint_.load(std::memory_order_acquire);
+    juce::String outputFingerprintText = outputFingerprint != 0 ? juce::String::toHexString(static_cast<int>(outputFingerprint)) : "--";
 
     juce::String status = backendKindToString(activeBackendKind_)
                           + " | " + backendPolicyToString(selectedBackendPolicy())
@@ -1963,7 +1968,8 @@ juce::String NeuralMorphingAudioProcessor::getBackendStatus() const
                           + " | " + selectedCodecId()
                           + " | wet=" + wetState + " " + juce::String(wetMixPercent_.load(std::memory_order_acquire)) + "%"
                           + " | tok=" + tokenChangeText
-                          + " | sig=" + fingerprintText;
+                          + " | sig=" + fingerprintText
+                          + " | out=" + outputFingerprintText;
 
 #if NM_WITH_PYBRIDGE
     if (auto* httpBackend = dynamic_cast<ModelBackendHttp*>(backend_.get()))

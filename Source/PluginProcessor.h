@@ -185,6 +185,7 @@ private:
     std::atomic<int> wetMixPercent_{ 0 };
     std::atomic<int> morphTokenChangePercent_{ -1 };
     std::atomic<uint32_t> morphAudioFingerprint_{ 0 };
+    std::atomic<uint32_t> outputAudioFingerprint_{ 0 };
     float morphLevelGain_ = 1.0f;
     float outputSafetyGain_ = 1.0f;
     float wetAvailabilityMix_ = 0.0f;
