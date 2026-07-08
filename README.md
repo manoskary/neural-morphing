@@ -28,7 +28,7 @@ The default demo settings are:
 - Threshold: `0.99`
 - Playback Dry/Wet: `0.7`
 - Match Mode: `beam`
-- Swap Mode: `full_layer_gated`
+- Swap Mode: `palette_only`
 
 ## Build The Local Plugin
 
@@ -45,6 +45,16 @@ Build outputs are written under:
 build-bridge/NeuralMorphing_artefacts/Release/VST3/
 build-bridge/NeuralMorphing_artefacts/Release/Standalone/
 ```
+
+Optional Standalone smoke-test preload:
+
+```powershell
+$env:NEURAL_MORPHING_DEMO_PALETTE_FILES="C:\path\palette_a.wav;C:\path\palette_b.wav"
+$env:NEURAL_MORPHING_DEMO_SOURCE_FILE="C:\path\source.wav"
+& ".\build-bridge\NeuralMorphing_artefacts\Release\Standalone\Neural Morphing.exe"
+```
+
+When the bridge and palette are ready, the status line should show `wet=ready` and `tok=NN%`.
 
 Attempt the native ONNX build only when ONNX Runtime is installed and discoverable by CMake:
 

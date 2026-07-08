@@ -12,6 +12,18 @@ const auto darkSlate = juce::Colour::fromRGB(0x0B, 0x12, 0x14);
 const auto accentGrey = juce::Colour::fromRGB(0x28, 0x32, 0x34);
 const auto textGrey = juce::Colour::fromRGB(0xB0, 0xC8, 0xC3);
 constexpr float knobStroke = 4.0f;
+
+std::vector<juce::File> filesFromEnvList(const juce::String& value)
+{
+    std::vector<juce::File> files;
+    for (const auto& token : juce::StringArray::fromTokens(value, ";", ""))
+    {
+        auto file = juce::File(token.trim().unquoted());
+        if (file.existsAsFile())
+            files.push_back(file);
+    }
+    return files;
+}
 }
 
 NeuralMorphingLookAndFeel::NeuralMorphingLookAndFeel()
@@ -271,6 +283,7 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     envelopeSlider_.addListener(this);
 
     startTimerHz(10);
+    autoloadStandaloneDemoFilesFromEnvironment();
 }
 
 NeuralMorphingAudioProcessorEditor::~NeuralMorphingAudioProcessorEditor()
@@ -294,6 +307,74 @@ NeuralMorphingAudioProcessorEditor::~NeuralMorphingAudioProcessorEditor()
     strideSlider_.removeListener(this);
     similaritySlider_.removeListener(this);
     envelopeSlider_.removeListener(this);
+}
+
+void NeuralMorphingAudioProcessorEditor::buildPaletteFromFiles(const std::vector<juce::File>& files)
+{
+    if (files.empty())
+        return;
+
+    lastFiles_ = files;
+    lastDirectory_ = files.front().getParentDirectory();
+
+    if (auto* worker = processor_.getPaletteWorker())
+    {
+        worker->requestBuild(lastFiles_, true,
+                             static_cast<int>(unitSlider_.getValue()),
+                             static_cast<int>(strideSlider_.getValue()));
+        processor_.invalidateMorphCache();
+    }
+}
+
+bool NeuralMorphingAudioProcessorEditor::loadStandaloneSourceFile(const juce::File& file)
+{
+    std::unique_ptr<juce::AudioFormatReader> reader(formatManager_.createReaderFor(file));
+    if (reader == nullptr || reader->lengthInSamples <= 0)
+        return false;
+
+    lastDirectory_ = file.getParentDirectory();
+
+    const int64_t length = reader->lengthInSamples;
+    juce::AudioBuffer<float> sourceBuffer(static_cast<int>(reader->numChannels), static_cast<int>(length));
+    reader->read(&sourceBuffer, 0, static_cast<int>(length), 0, true, true);
+
+    const double desiredSampleRate = processor_.getSampleRate() > 0.0 ? processor_.getSampleRate() : reader->sampleRate;
+    if (std::abs(reader->sampleRate - desiredSampleRate) > 1.0)
+    {
+        const double ratio = reader->sampleRate / desiredSampleRate;
+        const int outputSamples = static_cast<int>(std::ceil(static_cast<double>(length) / ratio));
+        juce::AudioBuffer<float> resampled(static_cast<int>(reader->numChannels), outputSamples);
+        resampled.clear();
+
+        for (int ch = 0; ch < resampled.getNumChannels(); ++ch)
+        {
+            juce::LagrangeInterpolator interpolator;
+            interpolator.reset();
+            interpolator.process(ratio,
+                                 sourceBuffer.getReadPointer(ch),
+                                 resampled.getWritePointer(ch),
+                                 outputSamples);
+        }
+
+        sourceBuffer = std::move(resampled);
+    }
+
+    processor_.setStandaloneSource(std::move(sourceBuffer), desiredSampleRate, file.getFileName());
+    return true;
+}
+
+void NeuralMorphingAudioProcessorEditor::autoloadStandaloneDemoFilesFromEnvironment()
+{
+    if (!showStandaloneSource_)
+        return;
+
+    const auto paletteValue = juce::SystemStats::getEnvironmentVariable("NEURAL_MORPHING_DEMO_PALETTE_FILES", {});
+    if (paletteValue.isNotEmpty())
+        buildPaletteFromFiles(filesFromEnvList(paletteValue));
+
+    const auto sourceValue = juce::SystemStats::getEnvironmentVariable("NEURAL_MORPHING_DEMO_SOURCE_FILE", {});
+    if (sourceValue.isNotEmpty())
+        loadStandaloneSourceFile(juce::File(sourceValue.trim().unquoted()));
 }
 
 void NeuralMorphingAudioProcessorEditor::paint(juce::Graphics& g)
@@ -592,16 +673,7 @@ void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
                                }
 
                                if (!lastFiles_.empty())
-                               {
-                                   lastDirectory_ = results.getFirst().getParentDirectory();
-                                   if (auto* worker = processor_.getPaletteWorker())
-                                   {
-                                       worker->requestBuild(lastFiles_, true,
-                                                            static_cast<int>(unitSlider_.getValue()),
-                                                            static_cast<int>(strideSlider_.getValue()));
-                                       processor_.invalidateMorphCache();
-                                   }
-                               }
+                                   buildPaletteFromFiles(lastFiles_);
                            });
         chooser.release(); // FileChooser will manage its own lifetime
     }
@@ -637,38 +709,7 @@ void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
                                  if (result == juce::File{})
                                      return;
 
-                                 std::unique_ptr<juce::AudioFormatReader> reader(formatManager_.createReaderFor(result));
-                                 if (reader == nullptr || reader->lengthInSamples <= 0)
-                                     return;
-
-                                 lastDirectory_ = result.getParentDirectory();
-
-                                 const int64_t length = reader->lengthInSamples;
-                                 juce::AudioBuffer<float> sourceBuffer(static_cast<int>(reader->numChannels), static_cast<int>(length));
-                                 reader->read(&sourceBuffer, 0, static_cast<int>(length), 0, true, true);
-
-                                 const double desiredSampleRate = processor_.getSampleRate() > 0.0 ? processor_.getSampleRate() : reader->sampleRate;
-                                 if (std::abs(reader->sampleRate - desiredSampleRate) > 1.0)
-                                 {
-                                     const double ratio = reader->sampleRate / desiredSampleRate;
-                                     const int outputSamples = static_cast<int>(std::ceil(static_cast<double>(length) / ratio));
-                                     juce::AudioBuffer<float> resampled(static_cast<int>(reader->numChannels), outputSamples);
-                                     resampled.clear();
-
-                                     for (int ch = 0; ch < resampled.getNumChannels(); ++ch)
-                                     {
-                                         juce::LagrangeInterpolator interpolator;
-                                         interpolator.reset();
-                                         interpolator.process(ratio,
-                                                              sourceBuffer.getReadPointer(ch),
-                                                              resampled.getWritePointer(ch),
-                                                              outputSamples);
-                                     }
-
-                                     sourceBuffer = std::move(resampled);
-                                 }
-
-                                 processor_.setStandaloneSource(std::move(sourceBuffer), desiredSampleRate, result.getFileName());
+                                 loadStandaloneSourceFile(result);
                              });
         chooser.release();
     }

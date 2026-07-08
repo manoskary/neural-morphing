@@ -51,6 +51,9 @@ private:
     void timerCallback() override;
     void setupSlider(juce::Slider& slider, const juce::String& name);
     juce::Rectangle<int> calculateLogoBounds() const;
+    void buildPaletteFromFiles(const std::vector<juce::File>& files);
+    bool loadStandaloneSourceFile(const juce::File& file);
+    void autoloadStandaloneDemoFilesFromEnvironment();
 
     NeuralMorphingAudioProcessor& processor_;
 
