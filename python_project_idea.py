@@ -458,10 +458,10 @@ class LatentGranularSynthesis:
     SWAP_ALIASES = {
         "full_layer": "full_layer_gated",
         "rvq_group": "rvq_group_current",
-        "palette_only": "full_layer_forced",
     }
     SWAP_MODES = {
         "identity",
+        "palette_only",
         "coarse_gated",
         "coarse_forced",
         "middle_only",
@@ -560,7 +560,7 @@ class LatentGranularSynthesis:
         self.candidate_count = 96
         self.beam_width = 12
         self.match_mode = "beam"
-        self.swap_mode = "full_layer_forced"
+        self.swap_mode = "palette_only"
         self._apply_codec_defaults("dac")
         self.last_timings = {"encode_ms": 0.0, "decode_ms": 0.0, "total_ms": 0.0}
         self.last_sequence_diagnostics = {}
@@ -1426,7 +1426,7 @@ class LatentGranularSynthesis:
             return _fallback()
 
         self._ensure_rvq_setup(target_codes.unsqueeze(0))
-        output_codes = target_codes.clone()
+        output_codes = torch.zeros_like(target_codes) if self.swap_mode == "palette_only" else target_codes.clone()
 
         grain_starts = list(range(0, target_codes.shape[-1] - self.unit + 1, self.stride))
         if not grain_starts:
@@ -1518,7 +1518,10 @@ class LatentGranularSynthesis:
             path_index = candidate["ann_index"]
             matched_indices.append(path_index)
             start = grain["start"]
-            span = min(self.unit, output_codes.shape[-1] - start)
+            if self.swap_mode == "palette_only" and grain_idx + 1 == len(grains):
+                span = output_codes.shape[-1] - start
+            else:
+                span = min(self.unit, output_codes.shape[-1] - start)
 
             coarse_transfer = candidate["emission"] <= self.threshold
             coarse_transfer_flags.append(float(coarse_transfer))
@@ -1541,7 +1544,7 @@ class LatentGranularSynthesis:
                 if coarse_transfer:
                     output_codes[:, start : start + span] = self.palette_codes[path_index, :, :span]
                 continue
-            if self.swap_mode == "full_layer_forced":
+            if self.swap_mode in {"palette_only", "full_layer_forced"}:
                 output_codes[:, start : start + span] = self.palette_codes[path_index, :, :span]
                 continue
             if self.swap_mode == "coarse_gated":
