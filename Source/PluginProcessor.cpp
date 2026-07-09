@@ -856,7 +856,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralMorphingAudioProcessor
     swapModeChoices.add("RVQ Group");
     swapModeChoices.add("Palette Only");
     params.push_back(std::make_unique<juce::AudioParameterChoice>("swapMode", "Swap Mode", swapModeChoices, 2));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("similarity", "Wet Focus", R(0.0f, 1.0f, 0.01f), 0.8f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("similarity", "Wet Focus", R(0.0f, 1.0f, 0.01f), 1.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("envelopeFollow", "Envelope Follow", R(0.0f, 1.0f, 0.01f), 0.7f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("dryWet", "Dry/Wet", R(0.0f, 1.0f, 0.01f), 0.7f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("outputGain", "Output Gain (dB)", R(-24.0f, 24.0f, 0.1f), -3.0f));
@@ -1403,7 +1403,6 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
     const float wetMix = juce::jlimit(0.0f, 1.0f, dryWet * wetAvailabilityMix_);
     const float dryGain = 1.0f - wetMix;
     const float wetGain = wetMix;
-    const bool qualityMode = selectedProcessingMode() == ProcessingMode::QualityParity;
     const float smoothingAmount = juce::jlimit(0.0f, 1.0f, getParam("envelopeFollow"));
 
     if (smoothingAmount <= 0.0f)
@@ -1446,19 +1445,19 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
     }
 
     float desiredLevelGain = 1.0f;
-    if (qualityMode && levelCount > 0)
+    if (levelCount > 0)
     {
         const float dryRms = std::sqrt(static_cast<float>(dryEnergy / static_cast<double>(levelCount)));
         const float morphRms = std::sqrt(static_cast<float>(morphEnergy / static_cast<double>(levelCount)));
         if (dryRms > 1.0e-4f && morphRms > 1.0e-4f)
-            desiredLevelGain = juce::jlimit(0.4f, 2.2f, dryRms / morphRms);
+            desiredLevelGain = juce::jlimit(0.25f, 6.0f, dryRms / morphRms);
     }
 
     const float levelAttack = 0.20f;
     const float levelRelease = 0.08f;
     const float levelCoeff = (desiredLevelGain < morphLevelGain_) ? levelAttack : levelRelease;
     morphLevelGain_ += levelCoeff * (desiredLevelGain - morphLevelGain_);
-    morphLevelGain_ = juce::jlimit(0.5f, 2.0f, morphLevelGain_);
+    morphLevelGain_ = juce::jlimit(0.25f, 6.0f, morphLevelGain_);
 
     for (int ch = 0; ch < totalNumOutputChannels; ++ch)
     {
@@ -1480,7 +1479,7 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
                 morphSample = (1.0f - smoothingAlpha) * morphSample + smoothingAlpha * prevSmoothed;
                 prevSmoothed = morphSample;
             }
-            morphSample *= juce::jmap(similarity, 0.65f, 1.15f);
+            morphSample *= juce::jmap(similarity, 0.75f, 2.50f);
             float outputSample = dryGain * drySample + wetGain * morphSample;
 
             // Dry/Wet is the source-to-palette volume crossfade; Wet Focus only colours the wet side.
