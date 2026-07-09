@@ -1648,64 +1648,13 @@ void NeuralMorphingAudioProcessor::processRealtimeMorphTask(juce::AudioBuffer<fl
     if (backend_ == nullptr || !backend_->ready() || !paletteReady())
         return;
 
-    auto targetTokens = backend_->encodePCM(encodeInput);
-    if (targetTokens.tokens.empty() || targetTokens.frames <= 0)
+    juce::AudioBuffer<float> morphedAudio;
+    int tokenChange = -1;
+    juce::String error;
+    if (!renderMorphedAudioForInput(encodeInput, morphedAudio, tokenChange, error))
         return;
 
-    const uint64_t cacheKey = hashMorphKey(targetTokens);
-    juce::AudioBuffer<float> morphedAudio;
-    bool hasMorphedAudio = false;
-
-    {
-        const juce::SpinLock::ScopedLockType lock(morphCacheMutex_);
-        for (size_t i = 0; i < morphCache_.size(); ++i)
-        {
-            if (morphCache_[i].hash != cacheKey)
-                continue;
-
-            if (i > 0)
-            {
-                auto entry = std::move(morphCache_[i]);
-                morphCache_.erase(morphCache_.begin() + static_cast<long>(i));
-                morphCache_.insert(morphCache_.begin(), std::move(entry));
-            }
-
-            if (morphCache_.front().audio.getNumSamples() > 0)
-            {
-                morphedAudio.makeCopyOf(morphCache_.front().audio);
-                morphTokenChangePercent_.store(morphCache_.front().tokenChangePercent, std::memory_order_release);
-                hasMorphedAudio = true;
-            }
-            break;
-        }
-    }
-
-    if (!hasMorphedAudio)
-    {
-        if (paletteWorker_ != nullptr && paletteWorker_->isBusy())
-            return;
-
-        auto matchedTokens = buildMatchedTokenBlock(targetTokens);
-        if (matchedTokens.tokens.empty() || matchedTokens.frames <= 0)
-            return;
-
-        const int tokenChange = tokenChangePercent(targetTokens, matchedTokens);
-        morphedAudio = backend_->decodeTokens(matchedTokens);
-        if (morphedAudio.getNumChannels() <= 0 || morphedAudio.getNumSamples() <= 0)
-            return;
-        morphTokenChangePercent_.store(tokenChange, std::memory_order_release);
-
-        MorphCacheEntry entry;
-        entry.hash = cacheKey;
-        entry.matchedTokens = std::move(matchedTokens);
-        entry.audio = morphedAudio;
-        entry.tokenChangePercent = tokenChange;
-
-        const juce::SpinLock::ScopedLockType lock(morphCacheMutex_);
-        morphCache_.insert(morphCache_.begin(), std::move(entry));
-        if (morphCache_.size() > maxMorphCacheEntries_)
-            morphCache_.pop_back();
-    }
+    morphTokenChangePercent_.store(tokenChange, std::memory_order_release);
 
     if (selectedProcessingMode() == ProcessingMode::QualityParity && qualityCrossfadeSamples_ > 0)
     {
@@ -1758,6 +1707,107 @@ void NeuralMorphingAudioProcessor::processRealtimeMorphTask(juce::AudioBuffer<fl
         decodedFifo_.pop(dropped);
         decodedFifo_.push(std::move(morphedAudio));
     }
+}
+
+bool NeuralMorphingAudioProcessor::renderMorphedAudioForInput(const juce::AudioBuffer<float>& encodeInput,
+                                                              juce::AudioBuffer<float>& morphedAudio,
+                                                              int& tokenChangePercentOut,
+                                                              juce::String& error)
+{
+    error.clear();
+    tokenChangePercentOut = -1;
+    morphedAudio.setSize(0, 0);
+
+    if (backend_ == nullptr || !backend_->ready())
+    {
+        error = "Backend is not ready.";
+        return false;
+    }
+
+    if (!paletteReady())
+    {
+        error = "Palette is not ready.";
+        return false;
+    }
+
+    try
+    {
+        auto targetTokens = backend_->encodePCM(encodeInput);
+        if (targetTokens.tokens.empty() || targetTokens.frames <= 0)
+        {
+            error = "Encode produced no tokens.";
+            return false;
+        }
+
+        const uint64_t cacheKey = hashMorphKey(targetTokens);
+        {
+            const juce::SpinLock::ScopedLockType lock(morphCacheMutex_);
+            for (size_t i = 0; i < morphCache_.size(); ++i)
+            {
+                if (morphCache_[i].hash != cacheKey)
+                    continue;
+
+                if (i > 0)
+                {
+                    auto entry = std::move(morphCache_[i]);
+                    morphCache_.erase(morphCache_.begin() + static_cast<long>(i));
+                    morphCache_.insert(morphCache_.begin(), std::move(entry));
+                }
+
+                if (morphCache_.front().audio.getNumSamples() > 0)
+                {
+                    morphedAudio.makeCopyOf(morphCache_.front().audio);
+                    tokenChangePercentOut = morphCache_.front().tokenChangePercent;
+                    return true;
+                }
+                break;
+            }
+        }
+
+        if (paletteWorker_ != nullptr && paletteWorker_->isBusy())
+        {
+            error = "Palette is still rebuilding.";
+            return false;
+        }
+
+        auto matchedTokens = buildMatchedTokenBlock(targetTokens);
+        if (matchedTokens.tokens.empty() || matchedTokens.frames <= 0)
+        {
+            error = "Morph matching produced no tokens.";
+            return false;
+        }
+
+        tokenChangePercentOut = tokenChangePercent(targetTokens, matchedTokens);
+        morphedAudio = backend_->decodeTokens(matchedTokens);
+        if (morphedAudio.getNumChannels() <= 0 || morphedAudio.getNumSamples() <= 0)
+        {
+            error = "Decode produced no audio.";
+            return false;
+        }
+
+        MorphCacheEntry entry;
+        entry.hash = cacheKey;
+        entry.matchedTokens = std::move(matchedTokens);
+        entry.audio = morphedAudio;
+        entry.tokenChangePercent = tokenChangePercentOut;
+
+        const juce::SpinLock::ScopedLockType lock(morphCacheMutex_);
+        morphCache_.insert(morphCache_.begin(), std::move(entry));
+        if (morphCache_.size() > maxMorphCacheEntries_)
+            morphCache_.pop_back();
+    }
+    catch (const std::exception& ex)
+    {
+        error = ex.what();
+        return false;
+    }
+    catch (...)
+    {
+        error = "Unknown render error.";
+        return false;
+    }
+
+    return true;
 }
 
 void NeuralMorphingAudioProcessor::initialiseBackend()
@@ -1992,6 +2042,147 @@ juce::String NeuralMorphingAudioProcessor::getBackendStatus() const
 bool NeuralMorphingAudioProcessor::isBackendReady() const
 {
     return backend_ != nullptr && backend_->ready();
+}
+
+bool NeuralMorphingAudioProcessor::renderStandaloneSourceToFile(const juce::File& outputFile, juce::String& error)
+{
+    error.clear();
+
+    if (backend_ == nullptr || !backend_->ready())
+    {
+        error = "Backend is not ready.";
+        return false;
+    }
+
+    if (!paletteReady())
+    {
+        error = "Palette is not ready.";
+        return false;
+    }
+
+    if (paletteWorker_ != nullptr && paletteWorker_->isBusy())
+    {
+        error = "Palette is still rebuilding.";
+        return false;
+    }
+
+    juce::AudioBuffer<float> source;
+    double sourceSampleRate = currentSampleRate_ > 0.0 ? currentSampleRate_ : 44100.0;
+    {
+        const juce::ScopedLock lock(standaloneMutex_);
+        if (!standaloneSourceLoaded_ || standaloneSourceBuffer_.getNumSamples() <= 0)
+        {
+            error = "No source sound loaded.";
+            return false;
+        }
+
+        source.makeCopyOf(standaloneSourceBuffer_, true);
+        if (standaloneSourceSampleRate_ > 0.0)
+            sourceSampleRate = standaloneSourceSampleRate_;
+    }
+
+    const bool restartRealtimeWorker = realtimeWorkerThread_.joinable();
+    stopRealtimeWorker();
+
+    bool ok = false;
+    do
+    {
+        const int requiredChannels = juce::jmax(1, backend_->requiredInputChannels());
+        juce::AudioBuffer<float> modelInput(requiredChannels, source.getNumSamples());
+        modelInput.clear();
+
+        if (requiredChannels == 1)
+        {
+            const int sourceChannels = juce::jmax(1, source.getNumChannels());
+            for (int ch = 0; ch < sourceChannels; ++ch)
+                modelInput.addFrom(0, 0, source, ch, 0, source.getNumSamples(), 1.0f / static_cast<float>(sourceChannels));
+        }
+        else
+        {
+            for (int ch = 0; ch < requiredChannels; ++ch)
+            {
+                const int sourceCh = juce::jmin(ch, source.getNumChannels() - 1);
+                modelInput.copyFrom(ch, 0, source, sourceCh, 0, source.getNumSamples());
+            }
+        }
+
+        juce::AudioBuffer<float> morphedAudio;
+        int tokenChange = -1;
+        if (!renderMorphedAudioForInput(modelInput, morphedAudio, tokenChange, error))
+            break;
+
+        juce::AudioBuffer<float> rendered;
+        rendered.makeCopyOf(source, true);
+        juce::AudioBuffer<float> dry;
+        dry.makeCopyOf(source, true);
+
+        morphTokenChangePercent_.store(tokenChange, std::memory_order_release);
+        morphAudioFingerprint_.store(audioFingerprint(morphedAudio), std::memory_order_release);
+        wetAvailabilityMix_ = 1.0f;
+        lastRealtimeMorphReadPosition_ = 0;
+        morphLevelGain_ = 1.0f;
+        outputSafetyGain_ = 1.0f;
+        resetMorphSmoothing();
+        mixMorphedAudio(rendered, dry, morphedAudio);
+
+        const float outputGain = juce::Decibels::decibelsToGain(getParam("outputGain"));
+        rendered.applyGain(outputGain);
+        applySafetyLimiter(rendered);
+        outputAudioFingerprint_.store(audioFingerprint(rendered), std::memory_order_release);
+
+        if (!outputFile.getParentDirectory().createDirectory())
+        {
+            error = "Could not create output directory.";
+            break;
+        }
+
+        if (outputFile.existsAsFile() && !outputFile.deleteFile())
+        {
+            error = "Could not overwrite output file.";
+            break;
+        }
+
+        juce::WavAudioFormat wavFormat;
+        auto stream = outputFile.createOutputStream();
+        if (stream == nullptr)
+        {
+            error = "Could not open output file.";
+            break;
+        }
+
+        std::unique_ptr<juce::AudioFormatWriter> writer(wavFormat.createWriterFor(
+            stream.release(),
+            sourceSampleRate,
+            static_cast<unsigned int>(juce::jmax(1, rendered.getNumChannels())),
+            24,
+            {},
+            0));
+
+        if (writer == nullptr)
+        {
+            error = "Could not create WAV writer.";
+            break;
+        }
+
+        if (!writer->writeFromAudioSampleBuffer(rendered, 0, rendered.getNumSamples()))
+        {
+            error = "Could not write rendered audio.";
+            break;
+        }
+
+        ok = true;
+    } while (false);
+
+    if (restartRealtimeWorker)
+        startRealtimeWorker();
+
+    return ok;
+}
+
+void NeuralMorphingAudioProcessor::armHighQualityRender()
+{
+    setProcessingMode(0);
+    invalidateMorphCache();
 }
 
 //==============================================================================

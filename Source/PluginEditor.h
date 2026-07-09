@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -55,6 +56,7 @@ private:
     bool loadStandaloneSourceFile(const juce::File& file);
     void applyStandaloneDemoParametersFromEnvironment();
     void autoloadStandaloneDemoFilesFromEnvironment();
+    void startStandaloneRenderChooser();
 
     NeuralMorphingAudioProcessor& processor_;
 
@@ -65,6 +67,7 @@ private:
     juce::TextButton loadButton_{ "Add Palette Sounds" };
     juce::TextButton clearButton_{ "Clear Palette" };
     juce::TextButton rebuildButton_{ "Rebuild" };
+    juce::TextButton renderButton_{ "Render HQ" };
     juce::TextButton loadSourceButton_{ "Load Source Sound" };
     juce::TextButton clearSourceButton_{ "Clear Source" };
 
@@ -118,6 +121,7 @@ private:
     juce::AudioFormatManager formatManager_;
     juce::File demoStatusFile_;
     juce::String lastDemoStatusText_;
+    std::atomic<bool> renderInProgress_{ false };
 
     juce::Image backgroundImage_;
     juce::Image logoImage_;

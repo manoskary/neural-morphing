@@ -60,6 +60,8 @@ $env:NEURAL_MORPHING_DEMO_STATUS_FILE="C:\path\status.txt"
 When the bridge and palette are ready, the status line should show `wet=ready` and `tok=NN%`.
 For control-sweep smoke tests, set `NEURAL_MORPHING_DEMO_TEMPERATURE`, `NEURAL_MORPHING_DEMO_THRESHOLD`, `NEURAL_MORPHING_DEMO_CONTINUITY`, `NEURAL_MORPHING_DEMO_RVQ_FOCUS`, `NEURAL_MORPHING_DEMO_WET_FOCUS`, `NEURAL_MORPHING_DEMO_ENVELOPE`, or `NEURAL_MORPHING_DEMO_DRY_WET` before launching and compare the `sig=...` / `wet=...` / `out=...` values in the status file. `sig` fingerprints the decoded palette wet signal; `out` fingerprints the final volume mix.
 
+Use `Render HQ WAV` in the Standalone to export the loaded source through the current palette and morph settings. In a DAW, use `Arm HQ Render` before the host freeze/bounce/export; the VST cannot render the whole host track by itself.
+
 Attempt the native ONNX build only when ONNX Runtime is installed and discoverable by CMake:
 
 ```powershell

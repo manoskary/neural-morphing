@@ -182,6 +182,7 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     addAndMakeVisible(loadButton_);
     addAndMakeVisible(clearButton_);
     addAndMakeVisible(rebuildButton_);
+    addAndMakeVisible(renderButton_);
     addAndMakeVisible(statusLabel_);
     addAndMakeVisible(progressLabel_);
     if (showStandaloneSource_)
@@ -271,12 +272,15 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     loadButton_.setColour(juce::TextButton::buttonColourId, accentGrey);
     clearButton_.setColour(juce::TextButton::buttonColourId, accentGrey);
     rebuildButton_.setColour(juce::TextButton::buttonColourId, accentGrey);
+    renderButton_.setColour(juce::TextButton::buttonColourId, accentGrey);
+    renderButton_.setButtonText(showStandaloneSource_ ? "Render HQ WAV" : "Arm HQ Render");
     loadSourceButton_.setColour(juce::TextButton::buttonColourId, accentGrey);
     clearSourceButton_.setColour(juce::TextButton::buttonColourId, accentGrey);
 
     loadButton_.addListener(this);
     clearButton_.addListener(this);
     rebuildButton_.addListener(this);
+    renderButton_.addListener(this);
     loadSourceButton_.addListener(this);
     clearSourceButton_.addListener(this);
     backendSelector_.addListener(this);
@@ -303,6 +307,7 @@ NeuralMorphingAudioProcessorEditor::~NeuralMorphingAudioProcessorEditor()
     loadButton_.removeListener(this);
     clearButton_.removeListener(this);
     rebuildButton_.removeListener(this);
+    renderButton_.removeListener(this);
     loadSourceButton_.removeListener(this);
     clearSourceButton_.removeListener(this);
     backendSelector_.removeListener(this);
@@ -371,6 +376,57 @@ bool NeuralMorphingAudioProcessorEditor::loadStandaloneSourceFile(const juce::Fi
 
     processor_.setStandaloneSource(std::move(sourceBuffer), desiredSampleRate, file.getFileName());
     return true;
+}
+
+void NeuralMorphingAudioProcessorEditor::startStandaloneRenderChooser()
+{
+    if (renderInProgress_.load(std::memory_order_acquire))
+        return;
+
+    if (!processor_.hasStandaloneSource())
+    {
+        statusLabel_.setText("Load a source sound before rendering.", juce::dontSendNotification);
+        return;
+    }
+
+    juce::String initialPath = lastDirectory_.exists()
+        ? lastDirectory_.getFullPathName()
+        : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getFullPathName();
+
+    auto chooser = std::make_unique<juce::FileChooser>("Render high-quality morph",
+                                                       juce::File(initialPath).getChildFile("neural_morphing_hq.wav"),
+                                                       "*.wav");
+    chooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+                         [this, chooserPtr = chooser.get()](const juce::FileChooser& fc)
+                         {
+                             juce::ignoreUnused(chooserPtr);
+                             auto outputFile = fc.getResult();
+                             if (outputFile == juce::File{})
+                                 return;
+
+                             if (!outputFile.hasFileExtension("wav"))
+                                 outputFile = outputFile.withFileExtension(".wav");
+
+                             renderInProgress_.store(true, std::memory_order_release);
+                             renderButton_.setEnabled(false);
+                             statusLabel_.setText("Rendering HQ WAV...", juce::dontSendNotification);
+
+                             juce::String error;
+                             const bool ok = processor_.renderStandaloneSourceToFile(outputFile, error);
+
+                             renderInProgress_.store(false, std::memory_order_release);
+                             renderButton_.setEnabled(true);
+                             if (ok)
+                             {
+                                 lastDirectory_ = outputFile.getParentDirectory();
+                                 statusLabel_.setText("Rendered: " + outputFile.getFileName(), juce::dontSendNotification);
+                             }
+                             else
+                             {
+                                 statusLabel_.setText("Render failed: " + error, juce::dontSendNotification);
+                             }
+                         });
+    chooser.release();
 }
 
 void NeuralMorphingAudioProcessorEditor::autoloadStandaloneDemoFilesFromEnvironment()
@@ -528,8 +584,9 @@ void NeuralMorphingAudioProcessorEditor::resized()
     juce::Rectangle<int> buttonRow(controlsX, currentY, controlsWidth, 36);
     auto buttonSpan = buttonRow;
     constexpr int buttonGap = 12;
+    constexpr int buttonCount = 4;
     int usableWidth = buttonSpan.getWidth();
-    int perButtonWidth = (usableWidth - 2 * buttonGap) / 3;
+    int perButtonWidth = (usableWidth - (buttonCount - 1) * buttonGap) / buttonCount;
     perButtonWidth = juce::jmax(120, perButtonWidth);
     perButtonWidth = juce::jmin(perButtonWidth, usableWidth);
 
@@ -543,6 +600,7 @@ void NeuralMorphingAudioProcessorEditor::resized()
     placeButton(loadButton_);
     placeButton(clearButton_);
     placeButton(rebuildButton_);
+    placeButton(renderButton_);
     layoutDebugInfo_ << "Buttons width:" << buttonRow.getWidth()
                      << " per:" << perButtonWidth << '\n';
     currentY += 36 + 10;
@@ -723,6 +781,18 @@ void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
                                  static_cast<int>(unitSlider_.getValue()),
                                  static_cast<int>(strideSlider_.getValue()));
             processor_.invalidateMorphCache();
+        }
+    }
+    else if (button == &renderButton_)
+    {
+        if (showStandaloneSource_)
+        {
+            startStandaloneRenderChooser();
+        }
+        else
+        {
+            processor_.armHighQualityRender();
+            statusLabel_.setText("HQ render armed. Use DAW freeze or bounce.", juce::dontSendNotification);
         }
     }
     else if (button == &loadSourceButton_)

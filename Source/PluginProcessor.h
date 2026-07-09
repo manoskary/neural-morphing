@@ -85,6 +85,8 @@ public:
     void setProcessingMode(int modeType);
     juce::String getBackendStatus() const;
     bool isBackendReady() const;
+    bool renderStandaloneSourceToFile(const juce::File& outputFile, juce::String& error);
+    void armHighQualityRender();
 
     void setStandaloneSource(juce::AudioBuffer<float> buffer, double sampleRate, const juce::String& name);
     void clearStandaloneSource();
@@ -130,6 +132,10 @@ private:
     void queueRealtimeMorphTask(const juce::AudioBuffer<float>& encodeInput);
     void realtimeWorkerLoop();
     void processRealtimeMorphTask(juce::AudioBuffer<float>& encodeInput);
+    bool renderMorphedAudioForInput(const juce::AudioBuffer<float>& encodeInput,
+                                    juce::AudioBuffer<float>& morphedAudio,
+                                    int& tokenChangePercentOut,
+                                    juce::String& error);
 
     std::unique_ptr<ModelBackend> backend_;
     std::unique_ptr<PaletteIndex> paletteIndex_;
