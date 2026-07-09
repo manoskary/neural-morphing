@@ -60,3 +60,6 @@ env/
 
 # Local preview logs
 logs/
+
+# Local listening-test scratch data
+listening/
