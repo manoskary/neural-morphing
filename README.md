@@ -26,7 +26,9 @@ Then open `http://localhost:8080`.
 The default demo settings are:
 
 - Threshold: `0.99`
-- Playback Dry/Wet: `0.7`
+- Continuity: `0.10`
+- Envelope: `0.05`
+- Playback Dry/Wet: `0.9`
 - Match Mode: `beam`
 - Swap Mode: `palette_only`
 
@@ -56,7 +58,7 @@ $env:NEURAL_MORPHING_DEMO_STATUS_FILE="C:\path\status.txt"
 ```
 
 When the bridge and palette are ready, the status line should show `wet=ready` and `tok=NN%`.
-For control-sweep smoke tests, set `NEURAL_MORPHING_DEMO_TEMPERATURE`, `NEURAL_MORPHING_DEMO_THRESHOLD`, `NEURAL_MORPHING_DEMO_CONTINUITY`, `NEURAL_MORPHING_DEMO_RVQ_FOCUS`, `NEURAL_MORPHING_DEMO_WET_FOCUS`, or `NEURAL_MORPHING_DEMO_DRY_WET` before launching and compare the `sig=...` / `wet=...` / `out=...` values in the status file. `sig` fingerprints the decoded palette wet signal; `out` fingerprints the final volume mix.
+For control-sweep smoke tests, set `NEURAL_MORPHING_DEMO_TEMPERATURE`, `NEURAL_MORPHING_DEMO_THRESHOLD`, `NEURAL_MORPHING_DEMO_CONTINUITY`, `NEURAL_MORPHING_DEMO_RVQ_FOCUS`, `NEURAL_MORPHING_DEMO_WET_FOCUS`, `NEURAL_MORPHING_DEMO_ENVELOPE`, or `NEURAL_MORPHING_DEMO_DRY_WET` before launching and compare the `sig=...` / `wet=...` / `out=...` values in the status file. `sig` fingerprints the decoded palette wet signal; `out` fingerprints the final volume mix.
 
 Attempt the native ONNX build only when ONNX Runtime is installed and discoverable by CMake:
 

@@ -29,7 +29,7 @@ struct MorphDefaults
 {
     float temperature = 0.47f;
     float threshold = 0.99f;
-    float continuity = 0.93f;
+    float continuity = 0.10f;
     float rvqFocus = 0.30f;
     int unit = 7;
     int stride = 2;
@@ -847,7 +847,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralMorphingAudioProcessor
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>("temperature", "Temperature", R(0.1f, 2.0f, 0.01f), 0.47f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("threshold", "Threshold", R(0.1f, 2.0f, 0.01f), 0.99f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("continuity", "Continuity", R(0.0f, 1.0f, 0.01f), 0.93f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("continuity", "Continuity", R(0.0f, 1.0f, 0.01f), 0.10f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("rvqFocus", "RVQ Focus", R(0.0f, 1.0f, 0.01f), 0.30f));
     params.push_back(std::make_unique<juce::AudioParameterInt>("unit", "Unit", 1, 10, 7));
     params.push_back(std::make_unique<juce::AudioParameterInt>("stride", "Stride", 1, 10, 2));
@@ -857,8 +857,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeuralMorphingAudioProcessor
     swapModeChoices.add("Palette Only");
     params.push_back(std::make_unique<juce::AudioParameterChoice>("swapMode", "Swap Mode", swapModeChoices, 2));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("similarity", "Wet Focus", R(0.0f, 1.0f, 0.01f), 1.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("envelopeFollow", "Envelope Follow", R(0.0f, 1.0f, 0.01f), 0.7f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("dryWet", "Dry/Wet", R(0.0f, 1.0f, 0.01f), 0.7f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("envelopeFollow", "Envelope Follow", R(0.0f, 1.0f, 0.01f), 0.05f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("dryWet", "Dry/Wet", R(0.0f, 1.0f, 0.01f), 0.9f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>("outputGain", "Output Gain (dB)", R(-24.0f, 24.0f, 0.1f), -3.0f));
 
     juce::StringArray processingModeChoices;

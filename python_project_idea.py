@@ -475,7 +475,7 @@ class LatentGranularSynthesis:
     DAC_DEFAULTS = {
         "temperature": 0.47,
         "threshold": 0.99,
-        "continuity": 0.93,
+        "continuity": 0.10,
         "rvq_focus": 0.30,
         "unit": 7,
         "stride": 2,
@@ -554,7 +554,7 @@ class LatentGranularSynthesis:
         self.stride = 1
         self.temperature = 0.47
         self.threshold = 0.99
-        self.continuity = 0.93
+        self.continuity = 0.10
         self.rvq_focus = 0.30
         self.top_k = 1
         self.candidate_count = 96
@@ -1859,7 +1859,7 @@ def _build_demo():
                     topk_slider = gr.Slider(1, 8, value=defaults["top_k"], step=1, label="Top-K")
 
                 with gr.Row():
-                    drywet_preview = gr.Slider(0.0, 1.0, value=0.7, step=0.01, label="Playback Dry/Wet")
+                    drywet_preview = gr.Slider(0.0, 1.0, value=0.9, step=0.01, label="Playback Dry/Wet")
 
                 b2 = gr.Button("Morph Audio", elem_classes=["nm-primary"])
                 gr.Markdown("### Playback")

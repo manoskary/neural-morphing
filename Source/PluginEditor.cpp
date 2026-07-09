@@ -400,6 +400,7 @@ void NeuralMorphingAudioProcessorEditor::applyStandaloneDemoParametersFromEnviro
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_CONTINUITY", "continuity");
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_RVQ_FOCUS", "rvqFocus");
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_WET_FOCUS", "similarity");
+    setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_ENVELOPE", "envelopeFollow");
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_DRY_WET", "dryWet");
 }
 
