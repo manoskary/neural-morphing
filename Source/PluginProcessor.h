@@ -201,6 +201,11 @@ private:
     bool hasLastRealtimeMorphBlock_ = false;
     int lastRealtimeMorphReadPosition_ = 0;
     bool lastRealtimeMorphWasUnderrun_ = false;
+    std::vector<float> lastWetOutputSample_;
+    std::vector<float> wetTransitionFromSample_;
+    int wetTransitionRemainingSamples_ = 0;
+    int wetTransitionTotalSamples_ = 0;
+    bool wetTransitionPending_ = false;
     std::atomic<int> morphWetState_{ 0 };
     std::atomic<int> wetMixPercent_{ 0 };
     std::atomic<int> morphTokenChangePercent_{ -1 };

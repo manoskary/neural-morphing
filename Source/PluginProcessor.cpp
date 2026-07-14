@@ -730,6 +730,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
                 {
                     if (latestMorphed.getNumChannels() <= 0 || latestMorphed.getNumSamples() <= 0)
                         continue;
+                    wetTransitionPending_ = hasLastRealtimeMorphBlock_;
                     lastRealtimeMorphBlock_.makeCopyOf(latestMorphed);
                     hasLastRealtimeMorphBlock_ = true;
                     lastRealtimeMorphReadPosition_ = 0;
@@ -742,6 +743,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
                     if (!enoughWetSamples)
                     {
                         lastRealtimeMorphWasUnderrun_ = true;
+                        wetTransitionPending_ = true;
                         lastRealtimeMorphReadPosition_ = 0;
                     }
                     morphWetState_.store(lastRealtimeMorphWasUnderrun_ ? 3 : 2, std::memory_order_release);
@@ -944,6 +946,11 @@ void NeuralMorphingAudioProcessor::resetMorphSmoothing()
     const auto channels = static_cast<size_t>(juce::jmax(1, getTotalNumOutputChannels()));
     sourceEnvelopeState_.assign(channels, 0.0f);
     wetEnvelopeState_.assign(channels, 0.0f);
+    lastWetOutputSample_.assign(channels, 0.0f);
+    wetTransitionFromSample_.assign(channels, 0.0f);
+    wetTransitionRemainingSamples_ = 0;
+    wetTransitionTotalSamples_ = 0;
+    wetTransitionPending_ = false;
 }
 
 uint64_t NeuralMorphingAudioProcessor::hashTokenBlock(const TokenBlock& block) const
@@ -1622,6 +1629,17 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
 
     const int morphSamples = morphed.getNumSamples();
     const int readStart = juce::jlimit(0, juce::jmax(0, morphSamples), lastRealtimeMorphReadPosition_);
+    if (wetTransitionPending_)
+    {
+        std::copy(lastWetOutputSample_.begin(), lastWetOutputSample_.end(), wetTransitionFromSample_.begin());
+        wetTransitionTotalSamples_ = juce::jlimit(
+            16,
+            128,
+            static_cast<int>(std::lround(0.002 * juce::jmax(1.0, currentSampleRate_))));
+        wetTransitionRemainingSamples_ = wetTransitionTotalSamples_;
+        wetTransitionPending_ = false;
+    }
+    const int transitionRemainingAtStart = wetTransitionRemainingSamples_;
     double wetEnergy = 0.0;
     int wetSampleCount = 0;
     const float attack = followEnvelope
@@ -1645,6 +1663,15 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
             const bool hasMorphSample = morphLinearIndex < morphSamples;
             float morphSample = hasMorphSample ? morphed.getSample(morphCh, morphLinearIndex) : 0.0f;
 
+            if (sample < transitionRemainingAtStart)
+            {
+                const int progress = wetTransitionTotalSamples_ - transitionRemainingAtStart + sample + 1;
+                const float alpha = static_cast<float>(progress)
+                                    / static_cast<float>(wetTransitionTotalSamples_ + 1);
+                morphSample = wetTransitionFromSample_[static_cast<size_t>(ch)] * (1.0f - alpha)
+                              + morphSample * alpha;
+            }
+
             if (followEnvelope)
             {
                 const float sourceMagnitude = std::abs(drySample);
@@ -1660,6 +1687,7 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
 
             wetEnergy += static_cast<double>(morphSample) * static_cast<double>(morphSample);
             ++wetSampleCount;
+            lastWetOutputSample_[static_cast<size_t>(ch)] = morphSample;
 
             buffer.setSample(ch, sample, dryGain * drySample + wetGain * morphSample);
         }
@@ -1673,6 +1701,7 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
 
     if (morphSamples > 0)
         lastRealtimeMorphReadPosition_ = juce::jmin(readStart + numSamples, morphSamples);
+    wetTransitionRemainingSamples_ = juce::jmax(0, transitionRemainingAtStart - numSamples);
 
     if (wetSampleCount > 0)
         visualWetLevel_.store(static_cast<float>(std::sqrt(wetEnergy / static_cast<double>(wetSampleCount))),
