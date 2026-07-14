@@ -13,9 +13,30 @@
 #include "OnsetDetector.h"
 #include "Workers.h"
 
-class NeuralMorphingAudioProcessor : public juce::AudioProcessor
+class NeuralMorphingAudioProcessor : public juce::AudioProcessor,
+                                     private juce::AudioProcessorValueTreeState::Listener
 {
 public:
+    enum class ProcessingMode
+    {
+        QualityParity = 0,
+        LiveRealtime
+    };
+
+    enum class BackendPolicy
+    {
+        NativePreferredBridgeFallback = 0,
+        BridgeOnly,
+        NativeOnly
+    };
+
+    enum class ActiveBackendKind
+    {
+        Stub = 0,
+        NativeOnnx,
+        BridgeHttp
+    };
+
     NeuralMorphingAudioProcessor();
     ~NeuralMorphingAudioProcessor() override;
 
@@ -48,6 +69,7 @@ public:
     //==============================================================================
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
+    void parameterChanged(const juce::String& parameterID, float newValue) override;
 
     float getParam(const juce::String& paramID) const;
 
@@ -60,15 +82,19 @@ public:
     // Backend management
     void switchBackend(int backendType);
     void setBridgeCodec(int codecType);
+    void setProcessingMode(int modeType);
     juce::String getBackendStatus() const;
     bool isBackendReady() const;
+    float visualWetLevel() const { return visualWetLevel_.load(std::memory_order_acquire); }
+    bool renderStandaloneSourceToFile(const juce::File& outputFile, juce::String& error);
+    void armHighQualityRender();
 
     void setStandaloneSource(juce::AudioBuffer<float> buffer, double sampleRate, const juce::String& name);
     void clearStandaloneSource();
     bool hasStandaloneSource() const;
     juce::String standaloneSourceName() const;
 
-    void invalidateMorphCache();
+    void invalidateMorphCache(bool keepWet = false);
 
 private:
     TokenBlock buildMatchedTokenBlock(const TokenBlock& targetBlock);
@@ -80,22 +106,47 @@ private:
     bool renderStandaloneSource(juce::AudioBuffer<float>& buffer);
     void resetMorphSmoothing();
     uint64_t hashTokenBlock(const TokenBlock& block) const;
-    uint64_t hashMorphKey(const TokenBlock& block) const;
+    uint64_t hashMorphKey(const TokenBlock& block, double outputSampleRate) const;
 
-    void refreshBackendSampleRate(double sampleRate);
-    void mixWetBuffer(juce::AudioBuffer<float>& buffer, juce::AudioBuffer<float>& dryBuffer);
     void applySafetyLimiter(juce::AudioBuffer<float>& buffer);
     void initialiseBackend();
     void shutdownWorkers();
     void createWorkers();
     void configureRealtimeTimings();
+    int currentLatencySamplesForMode() const;
+    void applyProcessingModeChangeIfNeeded();
+    void clearRealtimeSessionState(bool clearHistoryBuffer);
+    ProcessingMode selectedProcessingMode() const;
+    BackendPolicy selectedBackendPolicy() const;
+    juce::String selectedCodecId() const;
+    void applyDacDemoDefaults();
+    void updateWetAvailability(bool wetAvailable, int numSamples);
+    juce::String backendKindToString(ActiveBackendKind kind) const;
+    juce::String processingModeToString(ProcessingMode mode) const;
+    juce::String backendPolicyToString(BackendPolicy policy) const;
     void pushRealtimeInputHistory(const juce::AudioBuffer<float>& inputBlock);
     const juce::AudioBuffer<float>& selectRealtimeEncodeInput(const juce::AudioBuffer<float>& currentBlock) const;
     void startRealtimeWorker();
     void stopRealtimeWorker();
     void queueRealtimeMorphTask(const juce::AudioBuffer<float>& encodeInput);
     void realtimeWorkerLoop();
-    void processRealtimeMorphTask(juce::AudioBuffer<float>& encodeInput);
+    void processRealtimeMorphTokens(const TokenBlock& targetTokens,
+                                    const juce::AudioBuffer<float>& sourceAudio,
+                                    double outputSampleRate,
+                                    uint64_t revision);
+    bool renderMorphedAudioForInput(const juce::AudioBuffer<float>& encodeInput,
+                                    double inputSampleRate,
+                                    double outputSampleRate,
+                                    juce::AudioBuffer<float>& morphedAudio,
+                                    int& tokenChangePercentOut,
+                                    juce::String& error,
+                                    uint64_t expectedRevision = 0);
+    bool renderMorphedTokenBlock(const TokenBlock& targetTokens,
+                                 double outputSampleRate,
+                                 juce::AudioBuffer<float>& morphedAudio,
+                                 int& tokenChangePercentOut,
+                                 juce::String& error,
+                                 uint64_t expectedRevision = 0);
 
     std::unique_ptr<ModelBackend> backend_;
     std::unique_ptr<PaletteIndex> paletteIndex_;
@@ -106,7 +157,7 @@ private:
     OnsetDetector onsetDetector_;
     juce::AudioBuffer<float> backendInputScratch_;
     juce::AudioBuffer<float> realtimeInputHistory_;
-    juce::AudioBuffer<float> morphScratch_;
+    juce::AudioBuffer<float> dryScratch_;
 
     double currentSampleRate_ = 44100.0;
     int samplesPerBlock_ = 0;
@@ -120,6 +171,7 @@ private:
         uint64_t hash = 0;
         TokenBlock matchedTokens;
         juce::AudioBuffer<float> audio;
+        int tokenChangePercent = -1;
     };
 
     std::vector<MorphCacheEntry> morphCache_;
@@ -127,22 +179,48 @@ private:
     int morphUpdateIntervalMs_ = 40;
     int realtimeEncodeWindowMs_ = 0;
     int realtimeEncodeWindowSamples_ = 0;
+    int qualityLookaheadMs_ = 1000;
+    int qualitySuperframeSamples_ = 32768;
+    int qualityHopSamples_ = 8192;
+    int qualityCrossfadeSamples_ = 4096;
+    int liveCandidateCount_ = 48;
+    int liveBeamWidth_ = 6;
     int realtimeInputFilledSamples_ = 0;
-    std::vector<float> morphSmoothingState_;
+    int currentLatencySamples_ = 2048;
+    int lastKnownProcessingModeParam_ = -1;
+    std::vector<float> sourceEnvelopeState_;
+    std::vector<float> wetEnvelopeState_;
     mutable juce::SpinLock morphCacheMutex_;
     std::atomic<bool> resetSmoothingPending_{ false };
+    std::atomic<uint64_t> morphRevision_{ 1 };
+    std::atomic<bool> morphRefreshPending_{ false };
+    std::atomic<bool> clearLatestTargetPending_{ false };
     std::atomic<int> lastMatchedIndex_{ -1 };
     int morphUpdateCountdownSamples_ = 0;
     juce::AudioBuffer<float> lastRealtimeMorphBlock_;
     bool hasLastRealtimeMorphBlock_ = false;
     int lastRealtimeMorphReadPosition_ = 0;
+    bool lastRealtimeMorphWasUnderrun_ = false;
+    std::atomic<int> morphWetState_{ 0 };
+    std::atomic<int> wetMixPercent_{ 0 };
+    std::atomic<int> morphTokenChangePercent_{ -1 };
+    std::atomic<uint32_t> morphAudioFingerprint_{ 0 };
+    std::atomic<uint32_t> outputAudioFingerprint_{ 0 };
+    std::atomic<float> visualWetLevel_{ 0.0f };
     float outputSafetyGain_ = 1.0f;
+    float wetAvailabilityMix_ = 0.0f;
+    juce::AudioBuffer<float> qualityTailBuffer_;
+    bool qualityTailValid_ = false;
     std::thread realtimeWorkerThread_;
     std::atomic<bool> realtimeWorkerShouldExit_{ false };
     juce::WaitableEvent realtimeWorkerWake_;
     juce::CriticalSection realtimeTaskMutex_;
     juce::AudioBuffer<float> pendingRealtimeEncodeInput_;
+    double pendingRealtimeSampleRate_ = 44100.0;
     bool hasPendingRealtimeTask_ = false;
+    TokenBlock latestTargetTokens_;
+    juce::AudioBuffer<float> latestTargetInput_;
+    double latestTargetOutputSampleRate_ = 44100.0;
 
     mutable juce::CriticalSection standaloneMutex_;
     juce::AudioBuffer<float> standaloneSourceBuffer_;
@@ -150,6 +228,10 @@ private:
     double standaloneSourceSampleRate_ = 0.0;
     int64_t standaloneSourcePosition_ = 0;
     bool standaloneSourceLoaded_ = false;
+    bool deterministicDemoPlayback_ = false;
+
+    ActiveBackendKind activeBackendKind_ = ActiveBackendKind::Stub;
+    juce::String backendFallbackReason_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NeuralMorphingAudioProcessor)
 };

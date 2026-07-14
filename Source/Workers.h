@@ -28,6 +28,7 @@ public:
     ~PaletteWorker() override;
 
     void requestBuild(const std::vector<juce::File>& files, bool rebuildIndex, int unit, int stride);
+    void requestRegrain(int unit, int stride);
     bool isBusy() const noexcept { return busy_.load(); }
     double progress() const noexcept { return progress_.load(); }
     juce::String status() const;
@@ -38,6 +39,7 @@ protected:
 
 private:
     void processFiles();
+    void processRegrain();
 
     ModelBackend& backend_;
     PaletteIndex& index_;
@@ -46,7 +48,10 @@ private:
     int buildUnit_ = 1;
     int buildStride_ = 1;
 
-    std::atomic<bool> rebuildRequested_{ false };
+    std::atomic<bool> buildRequested_{ false };
+    std::atomic<bool> regrainRequested_{ false };
+    std::atomic<int> requestedUnit_{ 1 };
+    std::atomic<int> requestedStride_{ 1 };
     std::atomic<bool> busy_{ false };
     std::atomic<double> progress_{ 0.0 };
     juce::WaitableEvent workReady_;

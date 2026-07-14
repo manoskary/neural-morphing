@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -30,9 +31,10 @@ private:
 class NeuralMorphingAudioProcessor;
 
 class NeuralMorphingAudioProcessorEditor : public juce::AudioProcessorEditor,
-                                           private juce::Button::Listener,
-                                           private juce::ComboBox::Listener,
-                                           private juce::Timer
+                                            private juce::Button::Listener,
+                                            private juce::ComboBox::Listener,
+                                            private juce::Slider::Listener,
+                                            private juce::Timer
 {
 public:
     explicit NeuralMorphingAudioProcessorEditor(NeuralMorphingAudioProcessor&);
@@ -45,20 +47,29 @@ public:
 private:
     void buttonClicked(juce::Button*) override;
     void comboBoxChanged(juce::ComboBox*) override;
+    void sliderValueChanged(juce::Slider*) override;
+    void sliderDragEnded(juce::Slider*) override;
     void timerCallback() override;
-    void setupSlider(juce::Slider& slider, const juce::String& name);
+    void setupSlider(juce::Slider& slider, const juce::String& name, const juce::String& tooltip);
     juce::Rectangle<int> calculateLogoBounds() const;
+    void buildPaletteFromFiles(const std::vector<juce::File>& files);
+    bool loadStandaloneSourceFile(const juce::File& file);
+    void applyStandaloneDemoParametersFromEnvironment();
+    void autoloadStandaloneDemoFilesFromEnvironment();
+    void startStandaloneRenderChooser();
 
     NeuralMorphingAudioProcessor& processor_;
 
     NeuralMorphingLookAndFeel lookAndFeel_;
+    juce::TooltipWindow tooltipWindow_;
 
     static constexpr bool showLayoutDebug_ = false;
 
-    juce::TextButton loadButton_{ "Add Target Files" };
+    juce::TextButton loadButton_{ "Add Palette Sounds" };
     juce::TextButton clearButton_{ "Clear Palette" };
     juce::TextButton rebuildButton_{ "Rebuild" };
-    juce::TextButton loadSourceButton_{ "Load Source Audio" };
+    juce::TextButton renderButton_{ "Render HQ" };
+    juce::TextButton loadSourceButton_{ "Load Source Sound" };
     juce::TextButton clearSourceButton_{ "Clear Source" };
 
     juce::Label statusLabel_;
@@ -92,13 +103,16 @@ private:
 
     // Backend selection UI
     juce::ComboBox backendSelector_;
-    juce::Label backendLabel_{ "Backend", "Backend:" };
+    juce::Label backendLabel_{ "Backend", "Backend Policy:" };
+    juce::ComboBox processingModeSelector_;
+    juce::Label processingModeLabel_{ "ProcessingMode", "Processing Mode:" };
     juce::ComboBox bridgeCodecSelector_;
     juce::Label bridgeCodecLabel_{ "BridgeCodec", "Codec:" };
     juce::ComboBox swapModeSelector_;
     juce::Label swapModeLabel_{ "SwapMode", "Swap:" };
     juce::Label statusDisplayLabel_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> backendAttachment_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> processingModeAttachment_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> bridgeCodecAttachment_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> swapModeAttachment_;
 
@@ -106,8 +120,16 @@ private:
     std::vector<juce::File> lastFiles_;
     bool showStandaloneSource_ = false;
     juce::AudioFormatManager formatManager_;
+    juce::File demoStatusFile_;
+    juce::File demoRenderFile_;
+    juce::String lastDemoStatusText_;
+    juce::String demoRenderResult_;
+    bool demoRenderAttempted_ = false;
+    std::atomic<bool> renderInProgress_{ false };
+    float backgroundPulse_ = 0.0f;
 
     juce::Image backgroundImage_;
+    juce::Image backgroundPulseImage_;
     juce::Image logoImage_;
     mutable juce::Rectangle<int> logoBounds_;
 

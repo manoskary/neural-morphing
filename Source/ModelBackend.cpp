@@ -49,8 +49,9 @@ public:
         return TokenLayout::CodebookMajor;
     }
 
-    TokenBlock encodePCM(const juce::AudioBuffer<float>& mono) override
+    TokenBlock encodePCM(const juce::AudioBuffer<float>& mono, double sourceSampleRate) override
     {
+        juce::ignoreUnused(sourceSampleRate);
         const int samples = mono.getNumSamples();
         TokenBlock block;
         block.batchSize = 1;

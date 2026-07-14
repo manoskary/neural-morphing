@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -15,6 +16,9 @@ struct MatchResult
 {
     int annIndex = -1;
     float distance = 0.0f;
+    float coarseDistance = 0.0f;
+    float midDistance = 0.0f;
+    float fineDistance = 0.0f;
 };
 
 struct GrainConfig
@@ -23,37 +27,65 @@ struct GrainConfig
     int stride = 1;
 };
 
+struct RvqSearchConfig
+{
+    int coarseLength = 0;
+    int midLength = 0;
+    int fineLength = 0;
+    float coarseWeight = 1.0f;
+    float midWeight = 0.0f;
+    float fineWeight = 0.0f;
+};
+
 class PaletteIndex
 {
 public:
+    struct SourceData
+    {
+        std::vector<TokenBlock> tokenBlocks;
+        std::vector<std::vector<std::vector<float>>> frameVectors;
+    };
+
+    struct Snapshot
+    {
+        std::shared_ptr<const SourceData> sources;
+        std::vector<float> vectors;
+        std::vector<PaletteMeta> metas;
+        GrainConfig grainConfig;
+        int dimensions = 0;
+
+        int size() const noexcept
+        {
+            return dimensions > 0 ? static_cast<int>(vectors.size() / static_cast<size_t>(dimensions)) : 0;
+        }
+    };
+
+    using SnapshotPtr = std::shared_ptr<const Snapshot>;
+
     explicit PaletteIndex(int dimensions);
 
     void clear();
-    void add(const std::vector<float>& vectorRow, PaletteMeta meta);
-    void build();
-
-    std::vector<MatchResult> query(const std::vector<float>& queryVector, int k) const;
-
-    void setGrainConfig(int unit, int stride);
-    GrainConfig grainConfig() const;
-    bool getVector(int index, std::vector<float>& out) const;
-    float cosineDistance(int indexA, int indexB) const;
-
     void prepareForSamples(int count);
-    void setTokenBlock(int sampleId, TokenBlock block);
-    const TokenBlock* tokenBlockForSample(int sampleId) const;
-    const TokenBlock* tokensForMeta(const PaletteMeta& meta) const;
+    void setSampleData(int sampleId, TokenBlock block, std::vector<std::vector<float>> frameVectors);
+    bool publishBuild(int unit, int stride);
+    bool rebuildGrains(int unit, int stride);
 
+    SnapshotPtr snapshot() const;
+    std::vector<MatchResult> query(const SnapshotPtr& snapshot,
+                                   const std::vector<float>& queryVector,
+                                   int k,
+                                   const RvqSearchConfig& search) const;
+    float cosineDistance(const SnapshotPtr& snapshot, int indexA, int indexB) const;
+
+    GrainConfig grainConfig() const;
     int dimensions() const noexcept { return dims_; }
-    const PaletteMeta& meta(int index) const { return metas_.at(index); }
-    int size() const noexcept { return static_cast<int>(vectors_.size()); }
+    int size() const noexcept;
 
 private:
+    SnapshotPtr buildSnapshot(std::shared_ptr<const SourceData> sources, int unit, int stride) const;
+
     int dims_ = 0;
-    std::vector<std::vector<float>> vectors_;
-    std::vector<PaletteMeta> metas_;
-    std::vector<float> norms_;
-    std::vector<TokenBlock> tokenBlocks_;
-    GrainConfig grainConfig_;
-    mutable std::mutex mutex_;
+    mutable std::mutex pendingMutex_;
+    std::shared_ptr<SourceData> pendingSources_;
+    SnapshotPtr snapshot_;
 };

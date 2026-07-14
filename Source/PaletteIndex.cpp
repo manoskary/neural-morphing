@@ -4,148 +4,265 @@
 #include <cmath>
 #include <numeric>
 
+namespace
+{
+float cosineDistanceSlice(const std::vector<float>& query,
+                          const float* candidate,
+                          int start,
+                          int length)
+{
+    if (length <= 0)
+        return 0.0f;
+
+    float dot = 0.0f;
+    float queryNorm = 0.0f;
+    float candidateNorm = 0.0f;
+    for (int i = 0; i < length; ++i)
+    {
+        const float q = query[static_cast<size_t>(start + i)];
+        const float c = candidate[start + i];
+        dot += q * c;
+        queryNorm += q * q;
+        candidateNorm += c * c;
+    }
+
+    return 1.0f - dot / (std::sqrt(queryNorm * candidateNorm) + 1.0e-9f);
+}
+
+float cosineDistanceRaw(const float* first, const float* second, int length)
+{
+    float dot = 0.0f;
+    float firstNorm = 0.0f;
+    float secondNorm = 0.0f;
+    for (int i = 0; i < length; ++i)
+    {
+        dot += first[i] * second[i];
+        firstNorm += first[i] * first[i];
+        secondNorm += second[i] * second[i];
+    }
+    return 1.0f - dot / (std::sqrt(firstNorm * secondNorm) + 1.0e-9f);
+}
+}
+
 PaletteIndex::PaletteIndex(int dimensions)
     : dims_(dimensions)
 {
+    auto empty = std::make_shared<Snapshot>();
+    empty->dimensions = dims_;
+    std::atomic_store(&snapshot_, SnapshotPtr(empty));
 }
 
 void PaletteIndex::clear()
 {
-    std::scoped_lock lock(mutex_);
-    vectors_.clear();
-    metas_.clear();
-    norms_.clear();
-    tokenBlocks_.clear();
-    grainConfig_ = {};
-}
+    {
+        std::scoped_lock lock(pendingMutex_);
+        pendingSources_.reset();
+    }
 
-void PaletteIndex::add(const std::vector<float>& vectorRow, PaletteMeta meta)
-{
-    if (static_cast<int>(vectorRow.size()) != dims_)
-        return;
-
-    std::scoped_lock lock(mutex_);
-    vectors_.push_back(vectorRow);
-    metas_.push_back(meta);
-
-    const float norm = std::sqrt(std::inner_product(vectorRow.begin(), vectorRow.end(), vectorRow.begin(), 0.0f) + 1.0e-9f);
-    norms_.push_back(norm);
+    auto empty = std::make_shared<Snapshot>();
+    empty->dimensions = dims_;
+    std::atomic_store(&snapshot_, SnapshotPtr(empty));
 }
 
 void PaletteIndex::prepareForSamples(int count)
 {
-    std::scoped_lock lock(mutex_);
-    tokenBlocks_.clear();
-    tokenBlocks_.resize(static_cast<size_t>(std::max(0, count)));
+    auto sources = std::make_shared<SourceData>();
+    const auto size = static_cast<size_t>(std::max(0, count));
+    sources->tokenBlocks.resize(size);
+    sources->frameVectors.resize(size);
+
+    std::scoped_lock lock(pendingMutex_);
+    pendingSources_ = std::move(sources);
 }
 
-void PaletteIndex::setTokenBlock(int sampleId, TokenBlock block)
+void PaletteIndex::setSampleData(int sampleId,
+                                 TokenBlock block,
+                                 std::vector<std::vector<float>> frameVectors)
 {
     if (sampleId < 0)
         return;
 
-    std::scoped_lock lock(mutex_);
-    if (static_cast<size_t>(sampleId) >= tokenBlocks_.size())
-        tokenBlocks_.resize(static_cast<size_t>(sampleId) + 1);
+    std::scoped_lock lock(pendingMutex_);
+    if (pendingSources_ == nullptr)
+        return;
 
-    tokenBlocks_[static_cast<size_t>(sampleId)] = std::move(block);
+    const auto index = static_cast<size_t>(sampleId);
+    if (index >= pendingSources_->tokenBlocks.size())
+    {
+        pendingSources_->tokenBlocks.resize(index + 1);
+        pendingSources_->frameVectors.resize(index + 1);
+    }
+
+    pendingSources_->tokenBlocks[index] = std::move(block);
+    pendingSources_->frameVectors[index] = std::move(frameVectors);
 }
 
-const TokenBlock* PaletteIndex::tokenBlockForSample(int sampleId) const
+PaletteIndex::SnapshotPtr PaletteIndex::buildSnapshot(std::shared_ptr<const SourceData> sources,
+                                                       int unit,
+                                                       int stride) const
 {
-    if (sampleId < 0)
-        return nullptr;
+    auto result = std::make_shared<Snapshot>();
+    result->sources = std::move(sources);
+    result->dimensions = dims_;
+    result->grainConfig.unit = std::max(1, unit);
+    result->grainConfig.stride = std::min(std::max(1, stride), result->grainConfig.unit);
 
-    std::scoped_lock lock(mutex_);
-    if (static_cast<size_t>(sampleId) >= tokenBlocks_.size())
-        return nullptr;
+    if (result->sources == nullptr)
+        return result;
 
-    const auto& block = tokenBlocks_[static_cast<size_t>(sampleId)];
-    if (block.tokens.empty())
-        return nullptr;
+    for (size_t sampleId = 0; sampleId < result->sources->tokenBlocks.size(); ++sampleId)
+    {
+        const auto& tokens = result->sources->tokenBlocks[sampleId];
+        const auto& frames = result->sources->frameVectors[sampleId];
+        const int frameCount = std::min(tokens.frames, static_cast<int>(frames.size()));
+        if (tokens.empty() || frameCount < result->grainConfig.unit)
+            continue;
 
-    return &block;
+        for (int frame = 0;
+             frame + result->grainConfig.unit <= frameCount;
+             frame += result->grainConfig.stride)
+        {
+            const auto vectorStart = result->vectors.size();
+            result->vectors.resize(vectorStart + static_cast<size_t>(dims_), 0.0f);
+            bool valid = true;
+
+            for (int offset = 0; offset < result->grainConfig.unit; ++offset)
+            {
+                const auto& row = frames[static_cast<size_t>(frame + offset)];
+                if (static_cast<int>(row.size()) != dims_)
+                {
+                    valid = false;
+                    break;
+                }
+
+                for (int dimension = 0; dimension < dims_; ++dimension)
+                    result->vectors[vectorStart + static_cast<size_t>(dimension)] += row[static_cast<size_t>(dimension)];
+            }
+
+            if (!valid)
+            {
+                result->vectors.resize(vectorStart);
+                continue;
+            }
+
+            const float scale = 1.0f / static_cast<float>(result->grainConfig.unit);
+            for (int dimension = 0; dimension < dims_; ++dimension)
+                result->vectors[vectorStart + static_cast<size_t>(dimension)] *= scale;
+
+            result->metas.push_back({ static_cast<int>(sampleId), frame });
+        }
+    }
+
+    return result;
 }
 
-const TokenBlock* PaletteIndex::tokensForMeta(const PaletteMeta& meta) const
+bool PaletteIndex::publishBuild(int unit, int stride)
 {
-    return tokenBlockForSample(meta.sampleId);
+    std::shared_ptr<SourceData> sources;
+    {
+        std::scoped_lock lock(pendingMutex_);
+        sources = std::move(pendingSources_);
+    }
+
+    if (sources == nullptr)
+        return false;
+
+    auto next = buildSnapshot(std::move(sources), unit, stride);
+    const bool ready = next->size() > 0;
+    if (ready)
+        std::atomic_store(&snapshot_, SnapshotPtr(std::move(next)));
+    return ready;
 }
 
-void PaletteIndex::build()
+bool PaletteIndex::rebuildGrains(int unit, int stride)
 {
-    // Placeholder: when switching to ANN, build the index here.
+    const auto current = snapshot();
+    if (current == nullptr || current->sources == nullptr)
+        return false;
+
+    auto next = buildSnapshot(current->sources, unit, stride);
+    const bool ready = next->size() > 0;
+    if (ready)
+        std::atomic_store(&snapshot_, SnapshotPtr(std::move(next)));
+    return ready;
 }
 
-void PaletteIndex::setGrainConfig(int unit, int stride)
+PaletteIndex::SnapshotPtr PaletteIndex::snapshot() const
 {
-    std::scoped_lock lock(mutex_);
-    grainConfig_.unit = std::max(1, unit);
-    grainConfig_.stride = std::max(1, stride);
+    return std::atomic_load(&snapshot_);
+}
+
+std::vector<MatchResult> PaletteIndex::query(const SnapshotPtr& data,
+                                             const std::vector<float>& queryVector,
+                                             int k,
+                                             const RvqSearchConfig& search) const
+{
+    std::vector<MatchResult> results;
+    if (data == nullptr || k <= 0 || static_cast<int>(queryVector.size()) != dims_)
+        return results;
+
+    const int count = data->size();
+    results.reserve(static_cast<size_t>(count));
+
+    const bool grouped = search.coarseLength + search.midLength + search.fineLength == dims_;
+    for (int index = 0; index < count; ++index)
+    {
+        const float* candidate = data->vectors.data() + static_cast<size_t>(index) * static_cast<size_t>(dims_);
+        MatchResult match;
+        match.annIndex = index;
+
+        if (grouped)
+        {
+            match.coarseDistance = cosineDistanceSlice(queryVector, candidate, 0, search.coarseLength);
+            match.midDistance = cosineDistanceSlice(queryVector, candidate, search.coarseLength, search.midLength);
+            match.fineDistance = cosineDistanceSlice(
+                queryVector,
+                candidate,
+                search.coarseLength + search.midLength,
+                search.fineLength);
+            match.distance = search.coarseWeight * match.coarseDistance
+                             + search.midWeight * match.midDistance
+                             + search.fineWeight * match.fineDistance;
+        }
+        else
+        {
+            match.distance = cosineDistanceSlice(queryVector, candidate, 0, dims_);
+            match.coarseDistance = match.distance;
+            match.fineDistance = match.distance;
+        }
+        results.push_back(match);
+    }
+
+    const auto keep = std::min(results.size(), static_cast<size_t>(k));
+    std::partial_sort(results.begin(), results.begin() + static_cast<std::ptrdiff_t>(keep), results.end(),
+                      [](const MatchResult& lhs, const MatchResult& rhs)
+                      {
+                          if (lhs.distance == rhs.distance)
+                              return lhs.annIndex < rhs.annIndex;
+                          return lhs.distance < rhs.distance;
+                      });
+    results.resize(keep);
+    return results;
+}
+
+float PaletteIndex::cosineDistance(const SnapshotPtr& data, int indexA, int indexB) const
+{
+    if (data == nullptr || indexA < 0 || indexB < 0 || indexA >= data->size() || indexB >= data->size())
+        return 1.0f;
+
+    const float* firstVector = data->vectors.data() + static_cast<size_t>(indexA) * static_cast<size_t>(dims_);
+    const float* secondVector = data->vectors.data() + static_cast<size_t>(indexB) * static_cast<size_t>(dims_);
+    return cosineDistanceRaw(firstVector, secondVector, dims_);
 }
 
 GrainConfig PaletteIndex::grainConfig() const
 {
-    std::scoped_lock lock(mutex_);
-    return grainConfig_;
+    const auto current = snapshot();
+    return current != nullptr ? current->grainConfig : GrainConfig{};
 }
 
-bool PaletteIndex::getVector(int index, std::vector<float>& out) const
+int PaletteIndex::size() const noexcept
 {
-    std::scoped_lock lock(mutex_);
-    if (index < 0 || static_cast<size_t>(index) >= vectors_.size())
-        return false;
-
-    out = vectors_[static_cast<size_t>(index)];
-    return true;
-}
-
-float PaletteIndex::cosineDistance(int indexA, int indexB) const
-{
-    std::scoped_lock lock(mutex_);
-    if (indexA < 0 || indexB < 0)
-        return 1.0f;
-
-    const size_t idxA = static_cast<size_t>(indexA);
-    const size_t idxB = static_cast<size_t>(indexB);
-    if (idxA >= vectors_.size() || idxB >= vectors_.size())
-        return 1.0f;
-
-    float dot = 0.0f;
-    for (size_t i = 0; i < vectors_[idxA].size(); ++i)
-        dot += vectors_[idxA][i] * vectors_[idxB][i];
-
-    const float denom = (norms_[idxA] * norms_[idxB]) + 1.0e-9f;
-    return 1.0f - dot / denom;
-}
-
-std::vector<MatchResult> PaletteIndex::query(const std::vector<float>& queryVector, int k) const
-{
-    std::vector<MatchResult> results;
-    results.reserve(static_cast<size_t>(k));
-
-    if (queryVector.size() != static_cast<size_t>(dims_))
-        return results;
-
-    const float queryNorm = std::sqrt(std::inner_product(queryVector.begin(), queryVector.end(), queryVector.begin(), 0.0f) + 1.0e-9f);
-
-    std::scoped_lock lock(mutex_);
-    for (size_t i = 0; i < vectors_.size(); ++i)
-    {
-        const float dot = std::inner_product(queryVector.begin(), queryVector.end(), vectors_[i].begin(), 0.0f);
-        const float dist = 1.0f - dot / (queryNorm * norms_[i] + 1.0e-9f);
-        results.push_back({ static_cast<int>(i), dist });
-    }
-
-    const auto slice = std::min(results.size(), static_cast<size_t>(k));
-    std::partial_sort(results.begin(), results.begin() + slice, results.end(),
-        [](const MatchResult& lhs, const MatchResult& rhs)
-        {
-            return lhs.distance < rhs.distance;
-        });
-
-    if (static_cast<int>(results.size()) > k)
-        results.resize(static_cast<size_t>(k));
-
-    return results;
+    const auto current = snapshot();
+    return current != nullptr ? current->size() : 0;
 }

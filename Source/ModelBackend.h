@@ -47,7 +47,7 @@ public:
         return false;
     }
 
-    virtual TokenBlock encodePCM(const juce::AudioBuffer<float>& mono) = 0;
+    virtual TokenBlock encodePCM(const juce::AudioBuffer<float>& mono, double sourceSampleRate) = 0;
     virtual std::vector<float> tokensToVectorRow(const TokenBlock& block, int frameIndex) = 0;
     virtual bool tokensToVectorRows(const TokenBlock& block,
                                     int startFrame,

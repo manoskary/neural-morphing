@@ -18,11 +18,15 @@ public:
     int codebookCount() const override { return numCodebooks_; }
     int embeddingDimension() const override { return embeddingDim_; }
     int requiredInputChannels() const override { return 1; }
-    double frameRateHz() const override { return 0.0; }
+    double frameRateHz() const override { return frameRateHz_; }
     TokenLayout tokenLayout() const override { return TokenLayout::CodebookMajor; }
 
-    TokenBlock encodePCM(const juce::AudioBuffer<float>& mono) override;
+    TokenBlock encodePCM(const juce::AudioBuffer<float>& mono, double sourceSampleRate) override;
     std::vector<float> tokensToVectorRow(const TokenBlock& block, int frameIndex) override;
+    bool tokensToVectorRows(const TokenBlock& block,
+                            int startFrame,
+                            int frameCount,
+                            std::vector<std::vector<float>>& out) override;
     juce::AudioBuffer<float> decodeTokens(const TokenBlock& block) override;
 
 private:
@@ -32,6 +36,7 @@ private:
     int codebookSize_ = 0;
     int embeddingDimPerCodebook_ = 0;
     int embeddingDim_ = 0;
+    double frameRateHz_ = 0.0;
 
     std::vector<float> embeddings_;
 

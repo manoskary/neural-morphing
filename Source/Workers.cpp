@@ -1,6 +1,7 @@
 #include "Workers.h"
 
 #include <cmath>
+#include <exception>
 
 PaletteWorker::PaletteWorker(ModelBackend& backend, PaletteIndex& index)
     : juce::Thread("PaletteWorker"), backend_(backend), index_(index)
@@ -19,15 +20,25 @@ PaletteWorker::~PaletteWorker()
 
 void PaletteWorker::requestBuild(const std::vector<juce::File>& files, bool rebuildIndex, int unit, int stride)
 {
+    juce::ignoreUnused(rebuildIndex);
     {
         const juce::ScopedLock lock(stateMutex_);
         pendingFiles_ = files;
         buildUnit_ = juce::jmax(1, unit);
-        buildStride_ = juce::jmax(1, stride);
+        buildStride_ = juce::jlimit(1, buildUnit_, stride);
     }
 
-    rebuildRequested_.store(rebuildIndex, std::memory_order_release);
+    buildRequested_.store(true, std::memory_order_release);
     progress_.store(0.0, std::memory_order_release);
+    workReady_.signal();
+}
+
+void PaletteWorker::requestRegrain(int unit, int stride)
+{
+    const int safeUnit = juce::jmax(1, unit);
+    requestedUnit_.store(safeUnit, std::memory_order_release);
+    requestedStride_.store(juce::jlimit(1, safeUnit, stride), std::memory_order_release);
+    regrainRequested_.store(true, std::memory_order_release);
     workReady_.signal();
 }
 
@@ -50,7 +61,25 @@ void PaletteWorker::run()
         if (threadShouldExit())
             break;
 
-        processFiles();
+        try
+        {
+            if (buildRequested_.exchange(false, std::memory_order_acq_rel))
+                processFiles();
+            if (regrainRequested_.exchange(false, std::memory_order_acq_rel))
+                processRegrain();
+        }
+        catch (const std::exception& error)
+        {
+            busy_.store(false, std::memory_order_release);
+            const juce::ScopedLock lock(stateMutex_);
+            statusMessage_ = "Palette error: " + juce::String(error.what());
+        }
+        catch (...)
+        {
+            busy_.store(false, std::memory_order_release);
+            const juce::ScopedLock lock(stateMutex_);
+            statusMessage_ = "Palette error: unknown backend failure";
+        }
     }
 }
 
@@ -81,22 +110,36 @@ void PaletteWorker::processFiles()
         return;
     }
 
-    const bool rebuild = rebuildRequested_.exchange(false);
-    juce::ignoreUnused(rebuild);
-
     busy_.store(true, std::memory_order_release);
     progress_.store(0.0, std::memory_order_release);
 
-    if (rebuild)
-        index_.clear();
-
-    index_.prepareForSamples(static_cast<int>(files.size()));
-    index_.setGrainConfig(unit, stride);
+    constexpr int variantsPerFile = 3;
+    index_.prepareForSamples(static_cast<int>(files.size()) * variantsPerFile);
 
     {
         const juce::ScopedLock lock(stateMutex_);
-        statusMessage_ = "Indexing " + juce::String(files.size()) + " target files";
+            statusMessage_ = "Indexing " + juce::String(files.size()) + " palette sounds";
     }
+
+    int sampleId = 0;
+    bool trimmedLongFile = false;
+    auto indexPaletteVariant = [&](juce::AudioBuffer<float>& modelInput, double sourceSampleRate) -> bool
+    {
+        auto tokens = backend_.encodePCM(modelInput, sourceSampleRate);
+        if (tokens.empty())
+            return false;
+
+        const int currentSampleId = sampleId++;
+        std::vector<std::vector<float>> frameVectors;
+        const bool hasFrameVectors = backend_.tokensToVectorRows(tokens, 0, tokens.frames, frameVectors)
+                                     && static_cast<int>(frameVectors.size()) == tokens.frames;
+        if (!hasFrameVectors)
+            return false;
+
+        index_.setSampleData(currentSampleId, std::move(tokens), std::move(frameVectors));
+
+        return true;
+    };
 
     for (size_t i = 0; i < files.size(); ++i)
     {
@@ -106,7 +149,7 @@ void PaletteWorker::processFiles()
         auto file = files[i];
         {
             const juce::ScopedLock lock(stateMutex_);
-            statusMessage_ = "Indexing " + file.getFileName() + " (" + juce::String(i + 1) + "/" + juce::String(files.size()) + ")";
+            statusMessage_ = "Indexing palette sound " + file.getFileName() + " (" + juce::String(i + 1) + "/" + juce::String(files.size()) + ")";
         }
         std::unique_ptr<juce::AudioFormatReader> reader(formatManager_.createReaderFor(file));
         if (reader == nullptr)
@@ -116,21 +159,27 @@ void PaletteWorker::processFiles()
             continue;
         }
 
-        const juce::int64 length = static_cast<juce::int64>(reader->lengthInSamples);
-        if (length <= 0)
+        const juce::int64 availableLength = static_cast<juce::int64>(reader->lengthInSamples);
+        if (availableLength <= 0 || reader->sampleRate <= 0.0)
             continue;
 
-        juce::AudioBuffer<float> tempBuffer(static_cast<int>(reader->numChannels), static_cast<int>(length));
-        reader->read(&tempBuffer, 0, static_cast<int>(length), 0, true, true);
+        constexpr double maxPaletteSeconds = 10.0;
+        const auto maxLength = static_cast<juce::int64>(std::ceil(reader->sampleRate * maxPaletteSeconds));
+        const int length = static_cast<int>(juce::jmin(availableLength, maxLength));
+        trimmedLongFile = trimmedLongFile || availableLength > maxLength;
+
+        juce::AudioBuffer<float> tempBuffer(static_cast<int>(reader->numChannels), length);
+        if (!reader->read(&tempBuffer, 0, length, 0, true, true))
+            continue;
 
         const int requiredChannels = juce::jmax(1, backend_.requiredInputChannels());
-        juce::AudioBuffer<float> modelInput(requiredChannels, static_cast<int>(length));
+        juce::AudioBuffer<float> modelInput(requiredChannels, length);
         modelInput.clear();
 
         if (requiredChannels == 1)
         {
             for (int ch = 0; ch < tempBuffer.getNumChannels(); ++ch)
-                modelInput.addFrom(0, 0, tempBuffer, ch, 0, static_cast<int>(length), 1.0f / static_cast<float>(tempBuffer.getNumChannels()));
+                modelInput.addFrom(0, 0, tempBuffer, ch, 0, length, 1.0f / static_cast<float>(tempBuffer.getNumChannels()));
         }
         else
         {
@@ -138,65 +187,47 @@ void PaletteWorker::processFiles()
             for (int ch = 0; ch < requiredChannels; ++ch)
             {
                 const int srcCh = juce::jmin(ch, srcChannels - 1);
-                modelInput.copyFrom(ch, 0, tempBuffer, srcCh, 0, static_cast<int>(length));
+                modelInput.copyFrom(ch, 0, tempBuffer, srcCh, 0, length);
             }
         }
 
-        auto tokens = backend_.encodePCM(modelInput);
-        if (tokens.empty())
-            continue;
+        indexPaletteVariant(modelInput, reader->sampleRate);
 
-        index_.setTokenBlock(static_cast<int>(i), tokens);
-        std::vector<std::vector<float>> frameVectors;
-        const bool hasFrameVectors = backend_.tokensToVectorRows(tokens, 0, tokens.frames, frameVectors)
-                                     && static_cast<int>(frameVectors.size()) == tokens.frames;
-
-        for (int frame = 0; frame + unit <= tokens.frames; frame += stride)
+        for (float gain : { 0.7f, 0.3f })
         {
-            std::vector<float> pooled;
-            pooled.assign(static_cast<size_t>(index_.dimensions()), 0.0f);
-
-            bool valid = true;
-            for (int offset = 0; offset < unit; ++offset)
-            {
-                std::vector<float> vectorRow;
-                if (hasFrameVectors)
-                    vectorRow = frameVectors[static_cast<size_t>(frame + offset)];
-                else
-                    vectorRow = backend_.tokensToVectorRow(tokens, frame + offset);
-                if (static_cast<int>(vectorRow.size()) != index_.dimensions())
-                {
-                    valid = false;
-                    break;
-                }
-
-                for (int d = 0; d < index_.dimensions(); ++d)
-                    pooled[static_cast<size_t>(d)] += vectorRow[static_cast<size_t>(d)];
-            }
-
-            if (!valid)
-                continue;
-
-            const float invUnit = 1.0f / static_cast<float>(juce::jmax(1, unit));
-            for (auto& value : pooled)
-                value *= invUnit;
-
-            PaletteMeta meta;
-            meta.sampleId = static_cast<int>(i);
-            meta.frame = frame;
-            index_.add(pooled, meta);
+            juce::AudioBuffer<float> augmented;
+            augmented.makeCopyOf(modelInput, true);
+            augmented.applyGain(gain);
+            indexPaletteVariant(augmented, reader->sampleRate);
         }
 
         progress_.store(static_cast<double>(i + 1) / static_cast<double>(files.size()), std::memory_order_release);
     }
 
-    index_.build();
+    const bool published = index_.publishBuild(unit, stride);
     busy_.store(false, std::memory_order_release);
 
     {
         const juce::ScopedLock lock(stateMutex_);
-        statusMessage_ = juce::String("Indexed ") + juce::String(index_.size()) + " vectors";
+        statusMessage_ = published
+                             ? juce::String("Indexed ") + juce::String(index_.size()) + " vectors"
+                                   + (trimmedLongFile ? " (long files use first 10 s)" : "")
+                             : "Palette produced no valid grains";
     }
+}
+
+void PaletteWorker::processRegrain()
+{
+    busy_.store(true, std::memory_order_release);
+    const int unit = requestedUnit_.load(std::memory_order_acquire);
+    const int stride = requestedStride_.load(std::memory_order_acquire);
+    const bool rebuilt = index_.rebuildGrains(unit, stride);
+    busy_.store(false, std::memory_order_release);
+
+    const juce::ScopedLock lock(stateMutex_);
+    statusMessage_ = rebuilt
+                         ? juce::String("Regrained ") + juce::String(index_.size()) + " vectors"
+                         : "Palette is not ready for regraining";
 }
 
 MatchWorker::MatchWorker(ModelBackend& backend, PaletteIndex& index, AudioBufferRing& outputRing)
@@ -255,7 +286,11 @@ void MatchWorker::processTask(const SegmentTask& task)
     float baseFrequency = 220.0f;
     if (index_.size() > 0)
     {
-        auto matches = index_.query({ 0.5f, 0.5f }, 1);
+        const auto snapshot = index_.snapshot();
+        std::vector<float> query(static_cast<size_t>(index_.dimensions()), 0.5f);
+        RvqSearchConfig search;
+        search.coarseLength = index_.dimensions();
+        auto matches = index_.query(snapshot, query, 1, search);
         if (!matches.empty())
             baseFrequency += static_cast<float>(matches.front().annIndex % 12) * 20.0f;
     }

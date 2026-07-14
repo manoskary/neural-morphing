@@ -23,14 +23,22 @@ __pycache__/
 # Virtual environments
 venv/
 env/
+.venv*/
 
 # Temporary files
 *.tmp
 *.temp
 
 /build/
+/build-*/
 /build_nopy/
 /artifacts/
+/outputs/
+/deps/
+.pytest_cache/
+
+# Local clone of the Hugging Face Space deployment repo
+/hf-space-neural-morphing/
 
 # any wave files
 *.wav
@@ -38,3 +46,21 @@ env/
 *.flac
 *.m4a
 *.aac
+*.aif
+*.aiff
+
+# Intentional demo audio shipped with the app
+!examples/
+!examples/**/*.wav
+!examples/**/*.mp3
+!examples/**/*.flac
+!examples/**/*.m4a
+!examples/**/*.aac
+!examples/**/*.aif
+!examples/**/*.aiff
+
+# Local preview logs
+logs/
+
+# Local listening-test scratch data
+listening/

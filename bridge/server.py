@@ -318,14 +318,8 @@ class DacAdapter(CodecAdapter):
         sample_rate = int(getattr(processor, "sampling_rate", 44100))
         codebook_count = int(getattr(model.config, "n_codebooks", 1))
 
-        embedding_dim = getattr(getattr(model, "decoder", None), "conv1", None)
-        if embedding_dim is not None:
-            embedding_dim = getattr(embedding_dim, "in_channels", 0)
-        if not embedding_dim:
-            with torch.no_grad():
-                dummy_codes = torch.zeros((1, codebook_count, 1), dtype=torch.long, device=self._device)
-                quantized_rep, _, _ = model.quantizer.from_codes(dummy_codes)
-                embedding_dim = int(quantized_rep.shape[1])
+        quantizers = list(model.quantizer.quantizers)
+        embedding_dim = sum(int(quantizer.codebook.embedding_dim) for quantizer in quantizers)
 
         with torch.no_grad():
             one_second = np.zeros(sample_rate, dtype=np.float32)
@@ -362,8 +356,8 @@ class DacAdapter(CodecAdapter):
         mono = np.mean(samples, axis=1)
         if sample_rate != md.sample_rate:
             mono = librosa.resample(mono, orig_sr=sample_rate, target_sr=md.sample_rate)
-        mono = librosa.util.normalize(np.asarray(mono, dtype=np.float32))
-        return mono
+        mono = np.nan_to_num(np.asarray(mono, dtype=np.float32), nan=0.0, posinf=1.0, neginf=-1.0)
+        return np.clip(mono, -1.0, 1.0)
 
     @torch.inference_mode()
     def encode_samples(self, samples: np.ndarray, sample_rate: int) -> TokenBlock:
@@ -408,8 +402,15 @@ class DacAdapter(CodecAdapter):
 
         tokens_tensor = torch.as_tensor(block.tokens, dtype=torch.long).view(block.B, block.codebooks, block.T)
         frame_tokens = tokens_tensor[:, :, start_frame:end_frame].to(self._device)
-        quantized_representation, _, _ = self._model.quantizer.from_codes(frame_tokens)
-        vectors = np.asarray(quantized_representation.squeeze(0).transpose(0, 1).detach().cpu(), dtype=np.float32)
+        quantizers = self._model.quantizer.quantizers
+        if block.codebooks > len(quantizers):
+            raise ValueError(f"Token block has {block.codebooks} codebooks, model has {len(quantizers)}")
+
+        codebook_vectors = [
+            quantizers[codebook].codebook(frame_tokens[:, codebook, :])
+            for codebook in range(block.codebooks)
+        ]
+        vectors = np.asarray(torch.cat(codebook_vectors, dim=-1).squeeze(0).detach().cpu(), dtype=np.float32)
         return np.ascontiguousarray(vectors, dtype=np.float32)
 
     @torch.inference_mode()

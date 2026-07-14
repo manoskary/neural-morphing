@@ -5,6 +5,7 @@ import base64
 import unittest
 
 import numpy as np
+import torch
 from fastapi.testclient import TestClient
 
 import server
@@ -133,6 +134,42 @@ class CodecContractTests(unittest.TestCase):
         self.assertEqual(data["D"], 4)
         self.assertEqual(len(data["vectors"]), 2)
         self.assertEqual(len(data["vectors"][0]), 4)
+
+    def test_dac_vectors_are_concatenated_codebook_embeddings(self):
+        adapter = server.DacAdapter(torch.device("cpu"))
+        quantizers = []
+        for values in (
+            [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
+            [[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]],
+        ):
+            quantizer = type("FakeQuantizer", (), {})()
+            quantizer.codebook = torch.nn.Embedding.from_pretrained(torch.tensor(values), freeze=True)
+            quantizers.append(quantizer)
+
+        adapter._model = type("FakeModel", (), {})()
+        adapter._model.quantizer = type("FakeResidualQuantizer", (), {"quantizers": quantizers})()
+        adapter._processor = object()
+        adapter._metadata = server.CodecMetadata(44100, 2, 4, 1, 100.0)
+
+        block = server.TokenBlock(B=1, T=2, codebooks=2, tokens=[0, 2, 1, 0])
+        vectors = adapter.tokens_to_vector_rows(block, 0, 2)
+
+        np.testing.assert_array_equal(
+            vectors,
+            np.asarray([[1.0, 2.0, 30.0, 40.0], [5.0, 6.0, 10.0, 20.0]], dtype=np.float32),
+        )
+        self.assertEqual(vectors.shape[1] % block.codebooks, 0)
+
+    def test_dac_input_gain_is_preserved(self):
+        adapter = server.DacAdapter(torch.device("cpu"))
+        adapter._model = object()
+        adapter._processor = object()
+        adapter._metadata = server.CodecMetadata(44100, 2, 4, 1, 100.0)
+        samples = np.asarray([[0.25], [-0.5], [2.0]], dtype=np.float32)
+        np.testing.assert_array_equal(
+            adapter._prepare_mono(samples, 44100),
+            np.asarray([0.25, -0.5, 1.0], dtype=np.float32),
+        )
 
 
 if __name__ == "__main__":
