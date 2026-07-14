@@ -980,10 +980,13 @@ void NeuralMorphingAudioProcessorEditor::timerCallback()
         backendStatus += " | render=" + demoRenderResult_;
 
     statusDisplayLabel_.setText(backendStatus, juce::dontSendNotification);
-    if (demoStatusFile_ != juce::File{} && backendStatus != lastDemoStatusText_)
+    const auto nowMs = juce::Time::getMillisecondCounter();
+    const bool statusWriteDue = lastDemoStatusWriteMs_ == 0 || nowMs - lastDemoStatusWriteMs_ >= 500;
+    if (demoStatusFile_ != juce::File{} && statusWriteDue && backendStatus != lastDemoStatusText_)
     {
         demoStatusFile_.replaceWithText(backendStatus);
         lastDemoStatusText_ = backendStatus;
+        lastDemoStatusWriteMs_ = nowMs;
     }
 
     if (showStandaloneSource_)
