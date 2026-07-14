@@ -34,36 +34,37 @@ The default demo settings are:
 
 In the plugin, `Palette Bias` chooses similar versus adventurous palette grains, `Temperature` controls deterministic variation, `Continuity` controls temporal coherence, and `RVQ Focus` moves matching between coarse and fine DAC layers. `Grain Size` and `Grain Step` repool cached palette embeddings without re-encoding the palette sounds.
 
-## Install The VST3 And Standalone On Windows
+## Install The VST3 And Standalone
 
-There is no packaged installer yet. The steps below build the plugin from source, copy the VST3 bundle to the standard per-user location, and run the Standalone directly from the build directory.
+There is no packaged installer yet. The steps below build the plugin from source, copy the VST3 bundle to the standard user location, and run the Standalone directly from the build directory.
 
-### Prerequisites
+### Common Prerequisites
 
-- Windows 10 or 11, x64.
 - Git and CMake 3.22 or newer.
-- Visual Studio 2022 with the **Desktop development with C++** workload.
-- Python 3.12 for the recommended Python bridge backend.
+- Python 3.10 through 3.12 for the recommended Python bridge backend.
+- A C++17 compiler supported by CMake.
 - A VST3-compatible DAW for using the plugin version.
 
 ### 1. Clone The Repository
 
 Clone with the JUCE submodule:
 
-```powershell
+```bash
 git clone --branch demo --recurse-submodules https://github.com/manoskary/neural-morphing.git
 cd neural-morphing
 ```
 
 For an existing checkout, initialize JUCE with:
 
-```powershell
+```bash
 git submodule update --init --recursive
 ```
 
 ### 2. Install And Start The Python Bridge
 
 The bridge is the simplest backend to set up. It is a separate process: starting the Standalone or loading the VST3 does **not** start it automatically.
+
+On Windows PowerShell:
 
 ```powershell
 py -3.12 -m venv .venv
@@ -72,11 +73,24 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe .\bridge\server.py
 ```
 
-Keep that terminal open while using Neural Morphing. The bridge listens on `http://localhost:8000`, uses CUDA automatically when available, and downloads the DAC model from Hugging Face on first use. To force a device, set `BRIDGE_DEVICE` to `cpu` or `cuda` before starting it.
+On macOS or Linux:
 
-### 3. Build The Plugin
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r bridge/requirements.txt
+.venv/bin/python bridge/server.py
+```
 
-Open another PowerShell terminal in the repository and run:
+Keep that terminal open while using Neural Morphing. The bridge listens on `http://localhost:8000`, supports CPU and CUDA, and downloads the DAC model from Hugging Face on first use. To force a device, set `BRIDGE_DEVICE` to `cpu` or `cuda` before starting it. macOS currently uses the CPU backend because the bridge does not yet select Apple Metal/MPS.
+
+### 3. Build And Install
+
+The commands below build both the Standalone and VST3. Copy the complete `.vst3` bundle, not only the library inside it. The install locations follow the [official VST3 platform paths](https://steinbergmedia.github.io/vst3_dev_portal/pages/Technical%2BDocumentation/Locations%2BFormat/Plugin%2BLocations.html).
+
+#### Windows
+
+Install Visual Studio 2022 with the **Desktop development with C++** workload, then run:
 
 ```powershell
 cmake -S . -B build-bridge -G "Visual Studio 17 2022" -A x64 -DNEURAL_MORPHING_ENABLE_ONNX=OFF -DNM_WITH_PYBRIDGE=ON
@@ -90,33 +104,91 @@ build-bridge/NeuralMorphing_artefacts/Release/VST3/Neural Morphing.vst3/
 build-bridge/NeuralMorphing_artefacts/Release/Standalone/Neural Morphing.exe
 ```
 
-### 4. Install The VST3
-
-Copy the complete `.vst3` directory, not only the file inside it, to the [standard per-user VST3 location](https://steinbergmedia.github.io/vst3_dev_portal/pages/Technical%2BDocumentation/Locations%2BFormat/Plugin%2BLocations.html):
-
 ```powershell
 $vst3Directory = "$env:LOCALAPPDATA\Programs\Common\VST3"
 New-Item -ItemType Directory -Force $vst3Directory | Out-Null
 Copy-Item ".\build-bridge\NeuralMorphing_artefacts\Release\VST3\Neural Morphing.vst3" $vst3Directory -Recurse -Force
-```
-
-Restart the DAW or rescan its plugins, then insert **Neural Morphing** as an audio effect. The DAW track supplies the source audio; add the palette sounds from the plugin interface.
-
-For a system-wide installation, copy the bundle to `C:\Program Files\Common Files\VST3` from an Administrator PowerShell terminal.
-
-### 5. Run The Standalone
-
-The Standalone does not need installation:
-
-```powershell
 & ".\build-bridge\NeuralMorphing_artefacts\Release\Standalone\Neural Morphing.exe"
 ```
 
-Add palette sounds, load a source sound, and select **Bridge Only**, **DAC**, and **Palette Only** for the most direct first test. If the bridge is connected, the status line reports `backend=python_bridge` and eventually shows wet/token activity.
+For a system-wide VST3 installation, use `C:\Program Files\Common Files\VST3` from an Administrator PowerShell terminal.
+
+#### macOS
+
+Install the Xcode command-line tools and configure an Xcode build:
+
+```bash
+xcode-select --install
+cmake -S . -B build-bridge -G Xcode -DNEURAL_MORPHING_ENABLE_ONNX=OFF -DNM_WITH_PYBRIDGE=ON
+cmake --build build-bridge --config Release --target NeuralMorphing_Standalone NeuralMorphing_VST3
+```
+
+The build produces:
+
+```text
+build-bridge/NeuralMorphing_artefacts/Release/VST3/Neural Morphing.vst3/
+build-bridge/NeuralMorphing_artefacts/Release/Standalone/Neural Morphing.app/
+```
+
+Install the VST3 for the current user and launch the Standalone:
+
+```bash
+mkdir -p "$HOME/Library/Audio/Plug-Ins/VST3"
+cp -R "build-bridge/NeuralMorphing_artefacts/Release/VST3/Neural Morphing.vst3" "$HOME/Library/Audio/Plug-Ins/VST3/"
+open "build-bridge/NeuralMorphing_artefacts/Release/Standalone/Neural Morphing.app"
+```
+
+The system-wide VST3 location is `/Library/Audio/Plug-Ins/VST3` and requires administrator access.
+
+#### Linux
+
+On Ubuntu or Debian, install the compiler and JUCE dependencies:
+
+```bash
+sudo apt update
+sudo apt install build-essential cmake git pkg-config \
+  libasound2-dev libjack-jackd2-dev libcurl4-openssl-dev \
+  libfreetype-dev libfontconfig1-dev \
+  libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+  libxinerama-dev libxrandr-dev libxrender-dev
+```
+
+Package names differ on other distributions. Configure a Release build with the system compiler:
+
+```bash
+cmake -S . -B build-bridge -DCMAKE_BUILD_TYPE=Release \
+  -DNEURAL_MORPHING_ENABLE_ONNX=OFF -DNM_WITH_PYBRIDGE=ON
+cmake --build build-bridge --target NeuralMorphing_Standalone NeuralMorphing_VST3 --parallel
+```
+
+The build produces:
+
+```text
+build-bridge/NeuralMorphing_artefacts/Release/VST3/Neural Morphing.vst3/
+build-bridge/NeuralMorphing_artefacts/Release/Standalone/Neural Morphing
+```
+
+Install the VST3 for the current user and launch the Standalone:
+
+```bash
+mkdir -p "$HOME/.vst3"
+cp -R "build-bridge/NeuralMorphing_artefacts/Release/VST3/Neural Morphing.vst3" "$HOME/.vst3/"
+"build-bridge/NeuralMorphing_artefacts/Release/Standalone/Neural Morphing"
+```
+
+System-wide VST3 locations are `/usr/lib/vst3` and `/usr/local/lib/vst3` and require root access.
+
+### 4. First Test
+
+Restart the DAW or rescan its plugins, then insert **Neural Morphing** as an audio effect. The DAW track supplies the source audio; the Standalone uses the source sound loaded from its interface.
+
+Add palette sounds and select **Bridge Only**, **DAC**, and **Palette Only** for the most direct first test. If the bridge is connected, the status line reports `backend=python_bridge` and eventually shows wet/token activity.
 
 ### Optional Native ONNX Backend
 
-The native backend does not need the Python bridge while running, but it requires an ONNX Runtime C++ SDK and exported DAC model files. Configure the SDK path, build, and point the plugin to the model directory before launch:
+The native backend does not need the Python bridge while running, but it requires an ONNX Runtime C++ SDK for the target operating system and exported DAC model files.
+
+On Windows, configure it with the Visual Studio generator:
 
 ```powershell
 cmake -S . -B build-onnx -G "Visual Studio 17 2022" -A x64 -DNEURAL_MORPHING_ENABLE_ONNX=ON -DNM_WITH_PYBRIDGE=OFF -DONNXRUNTIME_ROOT="C:\path\to\onnxruntime"
@@ -125,7 +197,19 @@ $env:NEURAL_MORPHING_MODEL_DIR="C:\path\to\exported-dac-model"
 & ".\build-onnx\NeuralMorphing_artefacts\Release\Standalone\Neural Morphing.exe"
 ```
 
-The model directory must contain `encoder.onnx`, `decoder.onnx`, `embeddings.npy`, and `metadata.json`. `tools\export_dac.py` creates this layout.
+On macOS or Linux, use the same compiler setup as the bridge build:
+
+```bash
+cmake -S . -B build-onnx -DCMAKE_BUILD_TYPE=Release \
+  -DNEURAL_MORPHING_ENABLE_ONNX=ON -DNM_WITH_PYBRIDGE=OFF \
+  -DONNXRUNTIME_ROOT=/path/to/onnxruntime
+cmake --build build-onnx --target NeuralMorphing_Standalone NeuralMorphing_VST3 --parallel
+export NEURAL_MORPHING_MODEL_DIR=/path/to/exported-dac-model
+```
+
+Keep the ONNX Runtime shared library installed or discoverable from its SDK `lib` directory when launching the plugin or Standalone.
+
+The model directory must contain `encoder.onnx`, `decoder.onnx`, `embeddings.npy`, and `metadata.json`. `tools/export_dac.py` creates this layout.
 
 ## Developer Validation
 
