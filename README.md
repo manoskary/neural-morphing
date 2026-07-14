@@ -1,15 +1,13 @@
-# Neural Morphing Demo
+# Neural Morphing
 
-Hybrid demo branch for local plugin testing and hosted Gradio review.
+Neural audio morphing effect for VST3 hosts, Standalone use, and hosted Gradio review.
 
-This branch contains:
+This repository contains:
 
 - `Source/`, `Resources/`, `JUCE/`, `CMakeLists.txt` - VST3 and Standalone build tree.
 - `bridge/` - optional Python bridge runtime used by the plugin.
 - `python_project_idea.py`, `assets/`, `examples/` - Gradio demo app with curated examples.
 - `Dockerfile`, `cloudbuild.yaml` - Cloud Run deployment files.
-
-Paper, evaluation, result, table, and figure artifacts are intentionally not part of this branch.
 
 ## Run The Gradio Demo
 
@@ -34,21 +32,100 @@ The default demo settings are:
 
 In the plugin, `Palette Bias` chooses similar versus adventurous palette grains, `Temperature` controls deterministic variation, `Continuity` controls temporal coherence, and `RVQ Focus` moves matching between coarse and fine DAC layers. `Grain Size` and `Grain Step` repool cached palette embeddings without re-encoding the palette sounds.
 
-## Build The Local Plugin
+## Install The VST3 And Standalone On Windows
 
-Configure and build the Python-bridge plugin:
+There is no packaged installer yet. The steps below build the plugin from source, copy the VST3 bundle to the standard per-user location, and run the Standalone directly from the build directory.
+
+### Prerequisites
+
+- Windows 10 or 11, x64.
+- Git and CMake 3.22 or newer.
+- Visual Studio 2022 with the **Desktop development with C++** workload.
+- Python 3.12 for the recommended Python bridge backend.
+- A VST3-compatible DAW for using the plugin version.
+
+### 1. Clone The Repository
+
+Clone with the JUCE submodule:
+
+```powershell
+git clone --branch demo --recurse-submodules https://github.com/manoskary/neural-morphing.git
+cd neural-morphing
+```
+
+For an existing checkout, initialize JUCE with:
+
+```powershell
+git submodule update --init --recursive
+```
+
+### 2. Install And Start The Python Bridge
+
+The bridge is the simplest backend to set up. It is a separate process: starting the Standalone or loading the VST3 does **not** start it automatically.
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r .\bridge\requirements.txt
+.\.venv\Scripts\python.exe .\bridge\server.py
+```
+
+Keep that terminal open while using Neural Morphing. The bridge listens on `http://localhost:8000`, uses CUDA automatically when available, and downloads the DAC model from Hugging Face on first use. To force a device, set `BRIDGE_DEVICE` to `cpu` or `cuda` before starting it.
+
+### 3. Build The Plugin
+
+Open another PowerShell terminal in the repository and run:
 
 ```powershell
 cmake -S . -B build-bridge -G "Visual Studio 17 2022" -A x64 -DNEURAL_MORPHING_ENABLE_ONNX=OFF -DNM_WITH_PYBRIDGE=ON
-cmake --build build-bridge --config Release --target NeuralMorphing_All
+cmake --build build-bridge --config Release --target NeuralMorphing_Standalone NeuralMorphing_VST3
 ```
 
-Build outputs are written under:
+The build produces:
 
 ```text
-build-bridge/NeuralMorphing_artefacts/Release/VST3/
-build-bridge/NeuralMorphing_artefacts/Release/Standalone/
+build-bridge/NeuralMorphing_artefacts/Release/VST3/Neural Morphing.vst3/
+build-bridge/NeuralMorphing_artefacts/Release/Standalone/Neural Morphing.exe
 ```
+
+### 4. Install The VST3
+
+Copy the complete `.vst3` directory, not only the file inside it, to the [standard per-user VST3 location](https://steinbergmedia.github.io/vst3_dev_portal/pages/Technical%2BDocumentation/Locations%2BFormat/Plugin%2BLocations.html):
+
+```powershell
+$vst3Directory = "$env:LOCALAPPDATA\Programs\Common\VST3"
+New-Item -ItemType Directory -Force $vst3Directory | Out-Null
+Copy-Item ".\build-bridge\NeuralMorphing_artefacts\Release\VST3\Neural Morphing.vst3" $vst3Directory -Recurse -Force
+```
+
+Restart the DAW or rescan its plugins, then insert **Neural Morphing** as an audio effect. The DAW track supplies the source audio; add the palette sounds from the plugin interface.
+
+For a system-wide installation, copy the bundle to `C:\Program Files\Common Files\VST3` from an Administrator PowerShell terminal.
+
+### 5. Run The Standalone
+
+The Standalone does not need installation:
+
+```powershell
+& ".\build-bridge\NeuralMorphing_artefacts\Release\Standalone\Neural Morphing.exe"
+```
+
+Add palette sounds, load a source sound, and select **Bridge Only**, **DAC**, and **Palette Only** for the most direct first test. If the bridge is connected, the status line reports `backend=python_bridge` and eventually shows wet/token activity.
+
+### Optional Native ONNX Backend
+
+The native backend does not need the Python bridge while running, but it requires an ONNX Runtime C++ SDK and exported DAC model files. Configure the SDK path, build, and point the plugin to the model directory before launch:
+
+```powershell
+cmake -S . -B build-onnx -G "Visual Studio 17 2022" -A x64 -DNEURAL_MORPHING_ENABLE_ONNX=ON -DNM_WITH_PYBRIDGE=OFF -DONNXRUNTIME_ROOT="C:\path\to\onnxruntime"
+cmake --build build-onnx --config Release --target NeuralMorphing_Standalone NeuralMorphing_VST3
+$env:NEURAL_MORPHING_MODEL_DIR="C:\path\to\exported-dac-model"
+& ".\build-onnx\NeuralMorphing_artefacts\Release\Standalone\Neural Morphing.exe"
+```
+
+The model directory must contain `encoder.onnx`, `decoder.onnx`, `embeddings.npy`, and `metadata.json`. `tools\export_dac.py` creates this layout.
+
+## Developer Validation
 
 Optional Standalone smoke-test preload:
 
@@ -59,7 +136,7 @@ $env:NEURAL_MORPHING_DEMO_STATUS_FILE="C:\path\status.txt"
 & ".\build-bridge\NeuralMorphing_artefacts\Release\Standalone\Neural Morphing.exe"
 ```
 
-When the bridge and palette are ready, the status line should show `wet=ready` and `tok=NN%`.
+When the bridge and palette are ready, the status line should show wet activity and `tok=NN%`.
 For individual smoke overrides, set `NEURAL_MORPHING_DEMO_TEMPERATURE`, `NEURAL_MORPHING_DEMO_THRESHOLD`, `NEURAL_MORPHING_DEMO_CONTINUITY`, `NEURAL_MORPHING_DEMO_RVQ_FOCUS`, `NEURAL_MORPHING_DEMO_PALETTE_BIAS`, `NEURAL_MORPHING_DEMO_GRAIN_SIZE`, `NEURAL_MORPHING_DEMO_GRAIN_STEP`, `NEURAL_MORPHING_DEMO_ENVELOPE`, or `NEURAL_MORPHING_DEMO_DRY_WET`. `sig` fingerprints the decoded palette wet signal; `out` fingerprints the final volume mix.
 
 Run the deterministic control sweep with the bridge already listening on port 8000:
@@ -69,13 +146,6 @@ Run the deterministic control sweep with the bridge already listening on port 80
 ```
 
 Use `Render HQ WAV` in the Standalone to export the loaded source through the current palette and morph settings. In a DAW, use `Arm HQ Render` before the host freeze/bounce/export; the VST cannot render the whole host track by itself.
-
-Attempt the native ONNX build only when ONNX Runtime is installed and discoverable by CMake:
-
-```powershell
-cmake -S . -B build-onnx -G "Visual Studio 17 2022" -A x64 -DNEURAL_MORPHING_ENABLE_ONNX=ON -DNM_WITH_PYBRIDGE=OFF -DONNXRUNTIME_ROOT="C:\path\to\onnxruntime"
-cmake --build build-onnx --config Release --target NeuralMorphing_All
-```
 
 ## Python Checks
 
