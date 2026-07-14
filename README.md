@@ -1,4 +1,6 @@
-# Neural Morphing
+<p align="center">
+  <img src="assets/neural_morphing_title.png" alt="Neural Morphing" width="1000">
+</p>
 
 Neural audio morphing effect for VST3 hosts, Standalone use, and hosted Gradio review.
 
