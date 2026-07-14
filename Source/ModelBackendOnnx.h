@@ -21,8 +21,12 @@ public:
     double frameRateHz() const override { return frameRateHz_; }
     TokenLayout tokenLayout() const override { return TokenLayout::CodebookMajor; }
 
-    TokenBlock encodePCM(const juce::AudioBuffer<float>& mono) override;
+    TokenBlock encodePCM(const juce::AudioBuffer<float>& mono, double sourceSampleRate) override;
     std::vector<float> tokensToVectorRow(const TokenBlock& block, int frameIndex) override;
+    bool tokensToVectorRows(const TokenBlock& block,
+                            int startFrame,
+                            int frameCount,
+                            std::vector<std::vector<float>>& out) override;
     juce::AudioBuffer<float> decodeTokens(const TokenBlock& block) override;
 
 private:

@@ -34,6 +34,7 @@ env/
 /build_nopy/
 /artifacts/
 /outputs/
+/deps/
 .pytest_cache/
 
 # Local clone of the Hugging Face Space deployment repo

@@ -34,6 +34,8 @@ juce_add_binary_data(NeuralMorphingBinaryData
 juce_add_plugin(NeuralMorphing
     COMPANY_NAME "NeuralMorph"
     BUNDLE_ID com.neuralmorph.plugin
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/app_icon.png"
+    ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/Resources/app_icon.png"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
@@ -76,8 +78,27 @@ target_link_libraries(NeuralMorphing PRIVATE
 
 option(NEURAL_MORPHING_ENABLE_ONNX "Build with ONNX Runtime backend" ON)
 option(NM_WITH_PYBRIDGE "Build with Python bridge HTTP backend" ON)
+set(ONNXRUNTIME_ROOT "" CACHE PATH "Path to an ONNX Runtime SDK root containing include/ and lib/")
 if (NEURAL_MORPHING_ENABLE_ONNX)
     find_package(onnxruntime QUIET)
+    if (NOT onnxruntime_FOUND AND ONNXRUNTIME_ROOT)
+        find_path(ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h
+            PATHS "${ONNXRUNTIME_ROOT}/include"
+            NO_DEFAULT_PATH)
+        find_library(ONNXRUNTIME_LIBRARY onnxruntime
+            PATHS "${ONNXRUNTIME_ROOT}/lib"
+            NO_DEFAULT_PATH)
+        find_file(ONNXRUNTIME_DLL onnxruntime.dll
+            PATHS "${ONNXRUNTIME_ROOT}/lib"
+            NO_DEFAULT_PATH)
+        if (ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
+            add_library(onnxruntime::onnxruntime UNKNOWN IMPORTED)
+            set_target_properties(onnxruntime::onnxruntime PROPERTIES
+                IMPORTED_LOCATION "${ONNXRUNTIME_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${ONNXRUNTIME_INCLUDE_DIR}")
+            set(onnxruntime_FOUND TRUE)
+        endif()
+    endif()
     if (onnxruntime_FOUND)
         target_compile_definitions(NeuralMorphing PRIVATE NM_HAS_ONNX=1)
         target_link_libraries(NeuralMorphing PRIVATE onnxruntime::onnxruntime)
@@ -86,6 +107,22 @@ if (NEURAL_MORPHING_ENABLE_ONNX)
             Source/ModelBackendOnnx.h
         )
         message(STATUS "ONNX Runtime backend enabled")
+        if (MSVC)
+            foreach(_nm_wrapper_target NeuralMorphing_VST3 NeuralMorphing_Standalone)
+                target_link_options(${_nm_wrapper_target} PRIVATE "/DELAYLOAD:onnxruntime.dll")
+                target_link_libraries(${_nm_wrapper_target} PRIVATE delayimp)
+            endforeach()
+        endif()
+        if (ONNXRUNTIME_DLL)
+            foreach(_nm_wrapper_target NeuralMorphing_VST3 NeuralMorphing_Standalone)
+                if (TARGET ${_nm_wrapper_target})
+                    add_custom_command(TARGET ${_nm_wrapper_target} POST_BUILD
+                        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                                "${ONNXRUNTIME_DLL}"
+                                "$<TARGET_FILE_DIR:${_nm_wrapper_target}>")
+                endif()
+            endforeach()
+        endif()
     else()
         target_compile_definitions(NeuralMorphing PRIVATE NM_HAS_ONNX=0)
         message(WARNING "ONNX Runtime not found; building with stub backend only")

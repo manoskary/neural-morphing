@@ -32,6 +32,8 @@ The default demo settings are:
 - Match Mode: `beam`
 - Swap Mode: `palette_only`
 
+In the plugin, `Palette Bias` chooses similar versus adventurous palette grains, `Temperature` controls deterministic variation, `Continuity` controls temporal coherence, and `RVQ Focus` moves matching between coarse and fine DAC layers. `Grain Size` and `Grain Step` repool cached palette embeddings without re-encoding the palette sounds.
+
 ## Build The Local Plugin
 
 Configure and build the Python-bridge plugin:
@@ -58,14 +60,20 @@ $env:NEURAL_MORPHING_DEMO_STATUS_FILE="C:\path\status.txt"
 ```
 
 When the bridge and palette are ready, the status line should show `wet=ready` and `tok=NN%`.
-For control-sweep smoke tests, set `NEURAL_MORPHING_DEMO_TEMPERATURE`, `NEURAL_MORPHING_DEMO_THRESHOLD`, `NEURAL_MORPHING_DEMO_CONTINUITY`, `NEURAL_MORPHING_DEMO_RVQ_FOCUS`, `NEURAL_MORPHING_DEMO_WET_FOCUS`, `NEURAL_MORPHING_DEMO_ENVELOPE`, or `NEURAL_MORPHING_DEMO_DRY_WET` before launching and compare the `sig=...` / `wet=...` / `out=...` values in the status file. `sig` fingerprints the decoded palette wet signal; `out` fingerprints the final volume mix.
+For individual smoke overrides, set `NEURAL_MORPHING_DEMO_TEMPERATURE`, `NEURAL_MORPHING_DEMO_THRESHOLD`, `NEURAL_MORPHING_DEMO_CONTINUITY`, `NEURAL_MORPHING_DEMO_RVQ_FOCUS`, `NEURAL_MORPHING_DEMO_PALETTE_BIAS`, `NEURAL_MORPHING_DEMO_GRAIN_SIZE`, `NEURAL_MORPHING_DEMO_GRAIN_STEP`, `NEURAL_MORPHING_DEMO_ENVELOPE`, or `NEURAL_MORPHING_DEMO_DRY_WET`. `sig` fingerprints the decoded palette wet signal; `out` fingerprints the final volume mix.
+
+Run the deterministic control sweep with the bridge already listening on port 8000:
+
+```powershell
+.\tools\sweep_plugin_controls.ps1
+```
 
 Use `Render HQ WAV` in the Standalone to export the loaded source through the current palette and morph settings. In a DAW, use `Arm HQ Render` before the host freeze/bounce/export; the VST cannot render the whole host track by itself.
 
 Attempt the native ONNX build only when ONNX Runtime is installed and discoverable by CMake:
 
 ```powershell
-cmake -S . -B build-onnx -G "Visual Studio 17 2022" -A x64 -DNEURAL_MORPHING_ENABLE_ONNX=ON -DNM_WITH_PYBRIDGE=OFF
+cmake -S . -B build-onnx -G "Visual Studio 17 2022" -A x64 -DNEURAL_MORPHING_ENABLE_ONNX=ON -DNM_WITH_PYBRIDGE=OFF -DONNXRUNTIME_ROOT="C:\path\to\onnxruntime"
 cmake --build build-onnx --config Release --target NeuralMorphing_All
 ```
 

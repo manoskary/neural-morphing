@@ -5,6 +5,7 @@
 #include "JuceHeader.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace
@@ -207,7 +208,7 @@ TokenBlock ModelBackendHttp::parseTokenBlockResponse(const juce::String& respons
     return block;
 }
 
-TokenBlock ModelBackendHttp::encodePCM(const juce::AudioBuffer<float>& audioBuffer)
+TokenBlock ModelBackendHttp::encodePCM(const juce::AudioBuffer<float>& audioBuffer, double sourceSampleRate)
 {
     if (!ready_.load() || audioBuffer.getNumChannels() == 0 || audioBuffer.getNumSamples() == 0)
         return {};
@@ -226,7 +227,8 @@ TokenBlock ModelBackendHttp::encodePCM(const juce::AudioBuffer<float>& audioBuff
                     audioBuffer.getSample(channel, sample);
 
         juce::DynamicObject::Ptr requestObj = new juce::DynamicObject();
-        requestObj->setProperty("sample_rate", sampleRate_);
+        const int inputSampleRate = sourceSampleRate > 0.0 ? static_cast<int>(std::lround(sourceSampleRate)) : sampleRate_;
+        requestObj->setProperty("sample_rate", inputSampleRate);
         requestObj->setProperty("channels", channels);
         requestObj->setProperty("num_samples", samples);
         requestObj->setProperty("dtype", "float32le");
@@ -257,7 +259,7 @@ TokenBlock ModelBackendHttp::encodePCM(const juce::AudioBuffer<float>& audioBuff
     std::unique_ptr<juce::AudioFormatWriter> writer = wavFormat.createWriterFor(
         outputStream,
         juce::AudioFormatWriterOptions()
-            .withSampleRate(sampleRate_)
+            .withSampleRate(sourceSampleRate > 0.0 ? sourceSampleRate : static_cast<double>(sampleRate_))
             .withNumChannels(audioBuffer.getNumChannels())
             .withBitsPerSample(16));
 

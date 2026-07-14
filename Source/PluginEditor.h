@@ -50,7 +50,7 @@ private:
     void sliderValueChanged(juce::Slider*) override;
     void sliderDragEnded(juce::Slider*) override;
     void timerCallback() override;
-    void setupSlider(juce::Slider& slider, const juce::String& name);
+    void setupSlider(juce::Slider& slider, const juce::String& name, const juce::String& tooltip);
     juce::Rectangle<int> calculateLogoBounds() const;
     void buildPaletteFromFiles(const std::vector<juce::File>& files);
     bool loadStandaloneSourceFile(const juce::File& file);
@@ -61,6 +61,7 @@ private:
     NeuralMorphingAudioProcessor& processor_;
 
     NeuralMorphingLookAndFeel lookAndFeel_;
+    juce::TooltipWindow tooltipWindow_;
 
     static constexpr bool showLayoutDebug_ = false;
 
@@ -120,10 +121,15 @@ private:
     bool showStandaloneSource_ = false;
     juce::AudioFormatManager formatManager_;
     juce::File demoStatusFile_;
+    juce::File demoRenderFile_;
     juce::String lastDemoStatusText_;
+    juce::String demoRenderResult_;
+    bool demoRenderAttempted_ = false;
     std::atomic<bool> renderInProgress_{ false };
+    float backgroundPulse_ = 0.0f;
 
     juce::Image backgroundImage_;
+    juce::Image backgroundPulseImage_;
     juce::Image logoImage_;
     mutable juce::Rectangle<int> logoBounds_;
 

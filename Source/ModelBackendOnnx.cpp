@@ -2,7 +2,17 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdlib>
 #include <memory>
+#include <thread>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 #include <onnxruntime_cxx_api.h>
 
@@ -13,6 +23,31 @@
 namespace
 {
 #if defined(_WIN32)
+bool loadBundledOnnxRuntime()
+{
+    static const bool loaded = []
+    {
+        HMODULE module = nullptr;
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                                   | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCWSTR>(&loadBundledOnnxRuntime),
+                               &module))
+            return false;
+
+        std::array<wchar_t, 32768> modulePath{};
+        const DWORD length = GetModuleFileNameW(module, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+        if (length == 0 || length >= modulePath.size())
+            return false;
+
+        const auto runtimeFile = juce::File(juce::String(modulePath.data())).getSiblingFile("onnxruntime.dll");
+        if (!runtimeFile.existsAsFile())
+            return false;
+
+        return LoadLibraryExW(runtimeFile.getFullPathName().toWideCharPointer(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH) != nullptr;
+    }();
+    return loaded;
+}
+
 std::wstring toOrtPath(const juce::File& file)
 {
     return std::wstring(file.getFullPathName().toWideCharPointer());
@@ -69,6 +104,15 @@ Ort::MemoryInfo& cpuMemory()
     return memInfo;
 }
 
+int onnxThreadCount()
+{
+    const auto hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
+    int requestedThreads = 4;
+    if (const char* value = std::getenv("NEURAL_MORPHING_ONNX_THREADS"))
+        requestedThreads = juce::String(value).getIntValue();
+    return juce::jlimit(1, static_cast<int>(std::min(8u, hardwareThreads)), requestedThreads);
+}
+
 } // namespace
 
 class ModelBackendOnnx::Impl
@@ -76,9 +120,11 @@ class ModelBackendOnnx::Impl
 public:
     Impl()
     {
-        sessionOptions.SetIntraOpNumThreads(1);
+        sessionOptions.SetIntraOpNumThreads(onnxThreadCount());
         sessionOptions.SetInterOpNumThreads(1);
-        sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
+        sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        sessionOptions.AddConfigEntry("session.intra_op.allow_spinning", "0");
+        sessionOptions.AddConfigEntry("session.inter_op.allow_spinning", "0");
     }
 
     bool load(const juce::File& root)
@@ -131,6 +177,11 @@ bool ModelBackendOnnx::load(const std::string& modelRoot)
     if (!readEmbeddingBinary(embeddingFile, embeddings_))
         return false;
 
+#if defined(_WIN32)
+    if (!loadBundledOnnxRuntime())
+        return false;
+#endif
+
     impl_ = std::make_unique<Impl>();
     if (!impl_->load(root))
     {
@@ -142,15 +193,25 @@ bool ModelBackendOnnx::load(const std::string& modelRoot)
     return true;
 }
 
-TokenBlock ModelBackendOnnx::encodePCM(const juce::AudioBuffer<float>& mono)
+TokenBlock ModelBackendOnnx::encodePCM(const juce::AudioBuffer<float>& mono, double sourceSampleRate)
 {
     if (!ready_ || mono.getNumSamples() == 0 || impl_ == nullptr)
         return {};
 
-    const int samples = mono.getNumSamples();
+    const double inputRate = sourceSampleRate > 0.0 ? sourceSampleRate : static_cast<double>(sampleRate_);
+    const double ratio = inputRate / static_cast<double>(sampleRate_);
+    const int samples = std::max(1, static_cast<int>(std::lround(static_cast<double>(mono.getNumSamples()) / ratio)));
     std::vector<float> input(static_cast<size_t>(samples));
     const float* src = mono.getReadPointer(0);
-    std::copy(src, src + samples, input.begin());
+    if (std::abs(ratio - 1.0) < 1.0e-6)
+    {
+        std::copy(src, src + samples, input.begin());
+    }
+    else
+    {
+        juce::LagrangeInterpolator interpolator;
+        interpolator.process(ratio, src, input.data(), samples);
+    }
 
     std::array<int64_t, 2> inputShape{1, static_cast<int64_t>(samples)};
 
@@ -214,6 +275,42 @@ std::vector<float> ModelBackendOnnx::tokensToVectorRow(const TokenBlock& block, 
     }
 
     return row;
+}
+
+bool ModelBackendOnnx::tokensToVectorRows(const TokenBlock& block,
+                                          int startFrame,
+                                          int frameCount,
+                                          std::vector<std::vector<float>>& out)
+{
+    out.clear();
+    if (!ready_ || block.empty() || startFrame < 0 || frameCount <= 0 || startFrame >= block.frames)
+        return false;
+
+    const int endFrame = juce::jmin(block.frames, startFrame + frameCount);
+    const int outputFrames = juce::jmax(0, endFrame - startFrame);
+    if (outputFrames <= 0)
+        return false;
+
+    out.assign(static_cast<size_t>(outputFrames), std::vector<float>(static_cast<size_t>(embeddingDim_), 0.0f));
+
+    const size_t codebookStride = static_cast<size_t>(codebookSize_) * static_cast<size_t>(embeddingDimPerCodebook_);
+    for (int frame = startFrame; frame < endFrame; ++frame)
+    {
+        auto& row = out[static_cast<size_t>(frame - startFrame)];
+        for (int cb = 0; cb < block.codebooks; ++cb)
+        {
+            const int token = block.tokens[block.index(cb, frame)];
+            const int safeToken = juce::jlimit(0, codebookSize_ - 1, token);
+            const size_t embeddingOffset = static_cast<size_t>(cb) * codebookStride
+                                           + static_cast<size_t>(safeToken) * static_cast<size_t>(embeddingDimPerCodebook_);
+            const size_t rowOffset = static_cast<size_t>(cb) * static_cast<size_t>(embeddingDimPerCodebook_);
+            std::copy_n(embeddings_.data() + embeddingOffset,
+                        static_cast<size_t>(embeddingDimPerCodebook_),
+                        row.begin() + static_cast<std::ptrdiff_t>(rowOffset));
+        }
+    }
+
+    return true;
 }
 
 juce::AudioBuffer<float> ModelBackendOnnx::decodeTokens(const TokenBlock& block)

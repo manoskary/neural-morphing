@@ -4,10 +4,7 @@ Test script for the Neural Morphing Python Bridge Server
 """
 
 import requests
-import json
-import time
 import sys
-import os
 
 def test_server(base_url="http://localhost:8000"):
     """Test the Python bridge server endpoints"""
@@ -20,16 +17,16 @@ def test_server(base_url="http://localhost:8000"):
         response = requests.get(f"{base_url}/health", timeout=10)
         if response.status_code == 200:
             health_data = response.json()
-            print(f"✓ Health check passed: {health_data}")
+            print(f"OK Health check passed: {health_data}")
         else:
-            print(f"✗ Health check failed: {response.status_code}")
+            print(f"FAIL Health check failed: {response.status_code}")
             return False
             
         print("\n2. Testing /capabilities endpoint...")
         response = requests.get(f"{base_url}/capabilities", timeout=10)
         if response.status_code == 200:
             capabilities = response.json()
-            print(f"✓ Capabilities: codec={capabilities.get('active_codec')} channels={capabilities.get('required_input_channels')}")
+            print(f"OK Capabilities: codec={capabilities.get('active_codec')} channels={capabilities.get('required_input_channels')}")
         else:
             print(f"? Capabilities endpoint returned: {response.status_code}")
         
@@ -40,7 +37,7 @@ def test_server(base_url="http://localhost:8000"):
                                json={"path": "/nonexistent/file.wav"},
                                timeout=10)
         if response.status_code in [404, 500]:
-            print("✓ Encode endpoint responds correctly to invalid input")
+            print("OK Encode endpoint responds correctly to invalid input")
         else:
             print(f"? Encode endpoint returned: {response.status_code}")
             
@@ -49,7 +46,7 @@ def test_server(base_url="http://localhost:8000"):
                                json={"B": 1, "T": 1, "codebooks": 1, "tokens": [42], "frame_index": 0},
                                timeout=10)
         if response.status_code in [200, 500]:
-            print("✓ tokens_to_vectors endpoint responds")
+            print("OK tokens_to_vectors endpoint responds")
         else:
             print(f"? tokens_to_vectors endpoint returned: {response.status_code}")
             
@@ -58,7 +55,7 @@ def test_server(base_url="http://localhost:8000"):
                                json={"B": 1, "T": 1, "codebooks": 1, "tokens": [42]},
                                timeout=10)
         if response.status_code in [200, 500]:
-            print("✓ decode endpoint responds")
+            print("OK decode endpoint responds")
         else:
             print(f"? decode endpoint returned: {response.status_code}")
 
@@ -77,19 +74,19 @@ def test_server(base_url="http://localhost:8000"):
             timeout=10,
         )
         if response.status_code in [200, 500]:
-            print("✓ encode_pcm endpoint responds")
+            print("OK encode_pcm endpoint responds")
         else:
             print(f"? encode_pcm endpoint returned: {response.status_code}")
             
-        print(f"\n✓ Server at {base_url} appears to be working!")
+        print(f"\nOK Server at {base_url} appears to be working!")
         return True
         
-    except requests.exceptions.ConnectError:
-        print(f"✗ Cannot connect to server at {base_url}")
+    except requests.exceptions.ConnectionError:
+        print(f"FAIL Cannot connect to server at {base_url}")
         print("  Make sure the server is running with: python bridge/server.py")
         return False
     except Exception as e:
-        print(f"✗ Test failed: {e}")
+        print(f"FAIL Test failed: {e}")
         return False
 
 if __name__ == "__main__":

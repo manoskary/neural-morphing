@@ -26,7 +26,7 @@ public:
     TokenLayout tokenLayout() const override { return tokenLayout_; }
     bool setCodec(const std::string& codecId) override;
 
-    TokenBlock encodePCM(const juce::AudioBuffer<float>& mono) override;
+    TokenBlock encodePCM(const juce::AudioBuffer<float>& mono, double sourceSampleRate) override;
     std::vector<float> tokensToVectorRow(const TokenBlock& block, int frameIndex) override;
     bool tokensToVectorRows(const TokenBlock& block,
                             int startFrame,

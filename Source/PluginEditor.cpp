@@ -34,6 +34,52 @@ void setFloatParamFromEnv(juce::AudioProcessorValueTreeState& params, const char
     if (auto* param = dynamic_cast<juce::AudioParameterFloat*>(params.getParameter(paramId)))
         *param = value.getFloatValue();
 }
+
+void setIntParamFromEnv(juce::AudioProcessorValueTreeState& params, const char* envName, const char* paramId)
+{
+    const auto value = juce::SystemStats::getEnvironmentVariable(envName, {});
+    if (value.isEmpty())
+        return;
+
+    if (auto* param = dynamic_cast<juce::AudioParameterInt*>(params.getParameter(paramId)))
+        *param = value.getIntValue();
+}
+
+void setChoiceParamFromEnv(juce::AudioProcessorValueTreeState& params, const char* envName, const char* paramId)
+{
+    const auto value = juce::SystemStats::getEnvironmentVariable(envName, {});
+    if (value.isEmpty())
+        return;
+
+    if (auto* param = dynamic_cast<juce::AudioParameterChoice*>(params.getParameter(paramId)))
+        *param = value.getIntValue();
+}
+
+juce::Image createNeonPulseImage(const juce::Image& source)
+{
+    if (!source.isValid())
+        return {};
+
+    juce::Image pulse(juce::Image::ARGB, source.getWidth(), source.getHeight(), true);
+    juce::Image::BitmapData sourceData(source, juce::Image::BitmapData::readOnly);
+    juce::Image::BitmapData pulseData(pulse, juce::Image::BitmapData::writeOnly);
+
+    for (int y = 0; y < source.getHeight(); ++y)
+    {
+        for (int x = 0; x < source.getWidth(); ++x)
+        {
+            const auto colour = sourceData.getPixelColour(x, y);
+            const float saturation = juce::jlimit(0.0f, 1.0f, (colour.getSaturation() - 0.30f) / 0.50f);
+            const float brightness = juce::jlimit(0.0f, 1.0f, (colour.getBrightness() - 0.12f) / 0.55f);
+            const float strength = saturation * brightness;
+
+            if (strength > 0.0f)
+                pulseData.setPixelColour(x, y, colour.brighter(0.75f).withAlpha(0.85f * strength));
+        }
+    }
+
+    return pulse;
+}
 }
 
 NeuralMorphingLookAndFeel::NeuralMorphingLookAndFeel()
@@ -86,15 +132,17 @@ void NeuralMorphingLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y
             const float renderSize = juce::jmin(baseSize * 1.8f, juce::jmin(static_cast<float>(width), static_cast<float>(height)));
             const float drawX = centre.x - renderSize * 0.5f;
             const float drawY = centre.y - renderSize * 0.5f;
+            constexpr int sourceInset = 4;
+            const int sourceSize = frameSize - 2 * sourceInset;
             g.drawImage(knobSprite_,
                         static_cast<int>(drawX),
                         static_cast<int>(drawY),
                         static_cast<int>(renderSize),
                         static_cast<int>(renderSize),
-                        0,
-                        frameIndex * frameSize,
-                        frameSize,
-                        frameSize);
+                        sourceInset,
+                        frameIndex * frameSize + sourceInset,
+                        sourceSize,
+                        sourceSize);
             return;
         }
     }
@@ -170,13 +218,14 @@ juce::Font NeuralMorphingLookAndFeel::getComboBoxFont(juce::ComboBox&)
 }
 
 NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMorphingAudioProcessor& p)
-    : juce::AudioProcessorEditor(&p), processor_(p)
+    : juce::AudioProcessorEditor(&p), processor_(p), tooltipWindow_(nullptr, 500)
 {
     setLookAndFeel(&lookAndFeel_);
     formatManager_.registerBasicFormats();
     showStandaloneSource_ = processor_.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
 
     backgroundImage_ = juce::ImageCache::getFromMemory(BinaryData::vst_background_png, BinaryData::vst_background_pngSize);
+    backgroundPulseImage_ = createNeonPulseImage(backgroundImage_);
     logoImage_ = juce::ImageCache::getFromMemory(BinaryData::name_long_logo_png, BinaryData::name_long_logo_pngSize);
 
     addAndMakeVisible(loadButton_);
@@ -192,16 +241,26 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
         addAndMakeVisible(sourceStatusLabel_);
     }
 
-    setupSlider(temperatureSlider_, "Temperature");
-    setupSlider(thresholdSlider_, "Threshold");
-    setupSlider(continuitySlider_, "Continuity");
-    setupSlider(rvqFocusSlider_, "RVQ Focus");
-    setupSlider(unitSlider_, "Unit");
-    setupSlider(strideSlider_, "Stride");
-    setupSlider(similaritySlider_, "Wet Focus");
-    setupSlider(envelopeSlider_, "Envelope");
-    setupSlider(dryWetSlider_, "Dry/Wet");
-    setupSlider(outputSlider_, "Output");
+    setupSlider(temperatureSlider_, "Temperature",
+                "Controls palette exploration. Low values are predictable; high values produce more varied, fragmented choices. Usually useful from 0.1 to 1.6.");
+    setupSlider(thresholdSlider_, "Threshold",
+                "Limits eligible palette matches. Low values are selective; high values are broad. Changes are most audible below about 0.9.");
+    setupSlider(continuitySlider_, "Continuity",
+                "Moves from scattered grains to sustained trajectories from the same palette sound. High values preserve motion and phrasing.");
+    setupSlider(rvqFocusSlider_, "RVQ Focus",
+                "Shifts matching from coarse structure toward fine DAC timbral detail. Low is structural; high is brighter and more textural.");
+    setupSlider(unitSlider_, "Grain Size",
+                "Sets the replacement grain duration. Short grains fragment the sound; long grains preserve gestures and pitch contours.");
+    setupSlider(strideSlider_, "Grain Step",
+                "Sets the distance between grains. Short steps create dense overlap. Values above Grain Size are clamped to Grain Size.");
+    setupSlider(similaritySlider_, "Palette Bias",
+                "Controls how closely palette grains resemble the source. High values are compatible and stable; low values are more adventurous.");
+    setupSlider(envelopeSlider_, "Envelope",
+                "Transfers the source dynamics to the morphed audio. Moderate values add definition; very high values can pump.");
+    setupSlider(dryWetSlider_, "Dry/Wet",
+                "Linearly mixes source and morphed audio by volume. 0 is source only; 1 is morphed output only.");
+    setupSlider(outputSlider_, "Output",
+                "Sets final output gain in dB. Large boosts increasingly drive the safety limiter.");
 
     // Ensure labels are on top by bringing them to front after all sliders are set up
     for (auto& label : sliderLabels_)
@@ -254,6 +313,11 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     swapModeSelector_.addItem("RVQ Group", 2);
     swapModeSelector_.addItem("Palette Only", 3);
     swapModeAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor_.parameters, "swapMode", swapModeSelector_);
+
+    backendSelector_.setTooltip("Selects native ONNX, the Python bridge, or native with bridge fallback. This changes execution backend, not the parameter mapping.");
+    processingModeSelector_.setTooltip("Quality Parity favors coherent matching. Live Realtime uses a faster search and can sound more animated.");
+    bridgeCodecSelector_.setTooltip("Selects the bridge codec. DAC is supported by the current bridge; SpectroStream requires a compatible server.");
+    swapModeSelector_.setTooltip("Full Layer replaces complete DAC frames, RVQ Group creates a source/palette hybrid, and Palette Only guarantees palette-derived tokens.");
     
     backendLabel_.setVisible(false);
     processingModeLabel_.setVisible(false);
@@ -296,7 +360,7 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     similaritySlider_.addListener(this);
     envelopeSlider_.addListener(this);
 
-    startTimerHz(10);
+    startTimerHz(30);
     autoloadStandaloneDemoFilesFromEnvironment();
 }
 
@@ -337,7 +401,7 @@ void NeuralMorphingAudioProcessorEditor::buildPaletteFromFiles(const std::vector
         worker->requestBuild(lastFiles_, true,
                              static_cast<int>(unitSlider_.getValue()),
                              static_cast<int>(strideSlider_.getValue()));
-        processor_.invalidateMorphCache();
+        processor_.invalidateMorphCache(true);
     }
 }
 
@@ -440,6 +504,10 @@ void NeuralMorphingAudioProcessorEditor::autoloadStandaloneDemoFilesFromEnvironm
     if (statusValue.isNotEmpty())
         demoStatusFile_ = juce::File(statusValue.trim().unquoted());
 
+    const auto renderValue = juce::SystemStats::getEnvironmentVariable("NEURAL_MORPHING_DEMO_RENDER_FILE", {});
+    if (renderValue.isNotEmpty())
+        demoRenderFile_ = juce::File(renderValue.trim().unquoted());
+
     const auto paletteValue = juce::SystemStats::getEnvironmentVariable("NEURAL_MORPHING_DEMO_PALETTE_FILES", {});
     if (paletteValue.isNotEmpty())
         buildPaletteFromFiles(filesFromEnvList(paletteValue));
@@ -456,8 +524,16 @@ void NeuralMorphingAudioProcessorEditor::applyStandaloneDemoParametersFromEnviro
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_CONTINUITY", "continuity");
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_RVQ_FOCUS", "rvqFocus");
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_WET_FOCUS", "similarity");
+    setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_PALETTE_BIAS", "similarity");
+    setIntParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_GRAIN_SIZE", "unit");
+    setIntParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_GRAIN_STEP", "stride");
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_ENVELOPE", "envelopeFollow");
     setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_DRY_WET", "dryWet");
+    setFloatParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_OUTPUT_GAIN", "outputGain");
+    setChoiceParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_SWAP_MODE", "swapMode");
+    setChoiceParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_PROCESSING_MODE", "processingMode");
+    setChoiceParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_BACKEND", "backend");
+    setChoiceParamFromEnv(processor_.parameters, "NEURAL_MORPHING_DEMO_BRIDGE_CODEC", "bridgeCodec");
 }
 
 void NeuralMorphingAudioProcessorEditor::paint(juce::Graphics& g)
@@ -469,6 +545,13 @@ void NeuralMorphingAudioProcessorEditor::paint(juce::Graphics& g)
         g.setOpacity(0.95f);
         g.drawImageWithin(backgroundImage_, 0, 0, getWidth(), getHeight(), juce::RectanglePlacement::stretchToFit);
         g.setOpacity(1.0f);
+
+        if (backgroundPulseImage_.isValid() && backgroundPulse_ > 0.001f)
+        {
+            g.setOpacity(0.68f * backgroundPulse_);
+            g.drawImageWithin(backgroundPulseImage_, 0, 0, getWidth(), getHeight(), juce::RectanglePlacement::stretchToFit);
+            g.setOpacity(1.0f);
+        }
     }
     else
     {
@@ -780,7 +863,7 @@ void NeuralMorphingAudioProcessorEditor::buttonClicked(juce::Button* button)
             worker->requestBuild(lastFiles_, true,
                                  static_cast<int>(unitSlider_.getValue()),
                                  static_cast<int>(strideSlider_.getValue()));
-            processor_.invalidateMorphCache();
+            processor_.invalidateMorphCache(true);
         }
     }
     else if (button == &renderButton_)
@@ -842,19 +925,19 @@ void NeuralMorphingAudioProcessorEditor::sliderValueChanged(juce::Slider* slider
 
 void NeuralMorphingAudioProcessorEditor::sliderDragEnded(juce::Slider* slider)
 {
-    if ((slider == &unitSlider_ || slider == &strideSlider_) && !lastFiles_.empty())
-    {
-        if (auto* worker = processor_.getPaletteWorker())
-        {
-            worker->requestBuild(lastFiles_, true,
-                                 static_cast<int>(unitSlider_.getValue()),
-                                 static_cast<int>(strideSlider_.getValue()));
-        }
-    }
+    juce::ignoreUnused(slider);
 }
 
 void NeuralMorphingAudioProcessorEditor::timerCallback()
 {
+    const float wetDb = juce::Decibels::gainToDecibels(processor_.visualWetLevel(), -80.0f);
+    const float pulseTarget = wetDb > -42.0f ? juce::jlimit(0.0f, 1.0f, (wetDb + 42.0f) / 36.0f) : 0.0f;
+    const float smoothing = pulseTarget > backgroundPulse_ ? 0.42f : 0.10f;
+    const float previousPulse = backgroundPulse_;
+    backgroundPulse_ += smoothing * (pulseTarget - backgroundPulse_);
+    if (std::abs(backgroundPulse_ - previousPulse) > 0.001f)
+        repaint();
+
     juce::String statusText = "Idle";
     juce::String progressText;
 
@@ -881,6 +964,21 @@ void NeuralMorphingAudioProcessorEditor::timerCallback()
     
     // Update backend status
     juce::String backendStatus = processor_.getBackendStatus();
+
+    if (demoRenderFile_ != juce::File{} && !demoRenderAttempted_
+        && processor_.isBackendReady() && processor_.hasStandaloneSource()
+        && processor_.getPaletteWorker() != nullptr && !processor_.getPaletteWorker()->isBusy())
+    {
+        demoRenderAttempted_ = true;
+        juce::String error;
+        demoRenderResult_ = processor_.renderStandaloneSourceToFile(demoRenderFile_, error)
+                                ? "ready"
+                                : "error:" + error;
+    }
+
+    if (demoRenderResult_.isNotEmpty())
+        backendStatus += " | render=" + demoRenderResult_;
+
     statusDisplayLabel_.setText(backendStatus, juce::dontSendNotification);
     if (demoStatusFile_ != juce::File{} && backendStatus != lastDemoStatusText_)
     {
@@ -897,12 +995,14 @@ void NeuralMorphingAudioProcessorEditor::timerCallback()
     }
 }
 
-void NeuralMorphingAudioProcessorEditor::setupSlider(juce::Slider& slider, const juce::String& name)
+void NeuralMorphingAudioProcessorEditor::setupSlider(juce::Slider& slider,
+                                                     const juce::String& name,
+                                                     const juce::String& tooltip)
 {
     slider.setSliderStyle(juce::Slider::RotaryVerticalDrag);
     slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 70, 20);
     slider.setName(name);
-    slider.setTooltip(name);
+    slider.setTooltip(tooltip);
     slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     slider.setColour(juce::Slider::trackColourId, accentGrey);
     addAndMakeVisible(slider);
