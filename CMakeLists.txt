@@ -79,6 +79,7 @@ target_link_libraries(NeuralMorphing PRIVATE
 option(NEURAL_MORPHING_ENABLE_ONNX "Build with ONNX Runtime backend" ON)
 option(NM_WITH_PYBRIDGE "Build with Python bridge HTTP backend" ON)
 set(ONNXRUNTIME_ROOT "" CACHE PATH "Path to an ONNX Runtime SDK root containing include/ and lib/")
+set(NEURAL_MORPHING_DAC_MODEL_DIR "" CACHE PATH "Path to exported DAC ONNX model files to bundle")
 if (NEURAL_MORPHING_ENABLE_ONNX)
     find_package(onnxruntime QUIET)
     if (NOT onnxruntime_FOUND AND ONNXRUNTIME_ROOT)
@@ -121,6 +122,25 @@ if (NEURAL_MORPHING_ENABLE_ONNX)
                                 "${ONNXRUNTIME_DLL}"
                                 "$<TARGET_FILE_DIR:${_nm_wrapper_target}>")
                 endif()
+            endforeach()
+        endif()
+        if (NEURAL_MORPHING_DAC_MODEL_DIR)
+            set(_nm_dac_model_files
+                "${NEURAL_MORPHING_DAC_MODEL_DIR}/encoder.onnx"
+                "${NEURAL_MORPHING_DAC_MODEL_DIR}/decoder.onnx"
+                "${NEURAL_MORPHING_DAC_MODEL_DIR}/embeddings.bin"
+                "${NEURAL_MORPHING_DAC_MODEL_DIR}/metadata.json")
+            foreach(_nm_model_file IN LISTS _nm_dac_model_files)
+                if (NOT EXISTS "${_nm_model_file}")
+                    message(FATAL_ERROR "Missing DAC model file: ${_nm_model_file}")
+                endif()
+            endforeach()
+            foreach(_nm_wrapper_target NeuralMorphing_VST3 NeuralMorphing_Standalone)
+                add_custom_command(TARGET ${_nm_wrapper_target} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${_nm_wrapper_target}>/dac-onnx"
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                            ${_nm_dac_model_files}
+                            "$<TARGET_FILE_DIR:${_nm_wrapper_target}>/dac-onnx")
             endforeach()
         endif()
     else()

@@ -2197,22 +2197,27 @@ void NeuralMorphingAudioProcessor::initialiseBackend()
             return false;
 
 #if NM_HAS_ONNX
-        const juce::String modelRoot = juce::SystemStats::getEnvironmentVariable("NEURAL_MORPHING_MODEL_DIR", {});
-        if (modelRoot.isEmpty())
+        const auto modelOverride = juce::SystemStats::getEnvironmentVariable("NEURAL_MORPHING_MODEL_DIR", {});
+        const juce::File modelRoot = modelOverride.isNotEmpty()
+                                         ? juce::File(modelOverride)
+                                         : juce::File::getSpecialLocation(juce::File::currentExecutableFile)
+                                               .getSiblingFile("dac-onnx");
+
+        if (!modelRoot.isDirectory())
         {
-            backendFallbackReason_ = "native DAC model path missing (set NEURAL_MORPHING_MODEL_DIR)";
+            backendFallbackReason_ = "native DAC model path missing: " + modelRoot.getFullPathName();
             return false;
         }
 
         auto onnxBackend = createOnnxModelBackend();
-        if (onnxBackend != nullptr && onnxBackend->load(modelRoot.toStdString()))
+        if (onnxBackend != nullptr && onnxBackend->load(modelRoot.getFullPathName().toStdString()))
         {
             backend_ = std::move(onnxBackend);
             activeBackendKind_ = ActiveBackendKind::NativeOnnx;
             return true;
         }
 
-        backendFallbackReason_ = "native DAC load failed from " + modelRoot;
+        backendFallbackReason_ = "native DAC load failed from " + modelRoot.getFullPathName();
         return false;
 #else
         backendFallbackReason_ = "native DAC backend is disabled at build time";
