@@ -190,12 +190,17 @@ private:
     int currentLatencySamples_ = 2048;
     int lastKnownProcessingModeParam_ = -1;
     std::vector<float> sourceEnvelopeState_;
-    std::vector<float> wetEnvelopeState_;
+    std::vector<float> sourceTransientSlowState_;
+    std::vector<float> sourceCrossoverState_;
+    std::vector<float> wetCrossoverState_;
+    std::vector<float> sourceBandEnvelopeState_;
+    std::vector<float> wetBandEnvelopeState_;
     std::vector<float> wetHighPassState1_;
     std::vector<float> wetHighPassState2_;
     mutable juce::SpinLock morphCacheMutex_;
     std::atomic<bool> resetSmoothingPending_{ false };
     std::atomic<uint64_t> morphRevision_{ 1 };
+    std::atomic<int> latentMorphStage_{ -1 };
     std::atomic<bool> morphRefreshPending_{ false };
     std::atomic<bool> clearLatestTargetPending_{ false };
     std::atomic<int> lastMatchedIndex_{ -1 };
