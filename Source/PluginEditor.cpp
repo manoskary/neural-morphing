@@ -930,6 +930,7 @@ void NeuralMorphingAudioProcessorEditor::sliderDragEnded(juce::Slider* slider)
 
 void NeuralMorphingAudioProcessorEditor::timerCallback()
 {
+    processor_.flushDemoRealtimeCapture();
     const float wetDb = juce::Decibels::gainToDecibels(processor_.visualWetLevel(), -80.0f);
     const float pulseTarget = wetDb > -42.0f ? juce::jlimit(0.0f, 1.0f, (wetDb + 42.0f) / 36.0f) : 0.0f;
     const float smoothing = pulseTarget > backgroundPulse_ ? 0.42f : 0.10f;

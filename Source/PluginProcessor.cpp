@@ -67,6 +67,31 @@ float processWetHighPass(float input,
     return output;
 }
 
+int wetLoopCrossfadeSamples(double sampleRate, int morphSamples)
+{
+    if (sampleRate <= 0.0 || morphSamples < 4)
+        return 0;
+    return juce::jlimit(
+        1,
+        morphSamples / 4,
+        static_cast<int>(std::lround(0.020 * sampleRate)));
+}
+
+int chooseWetLoopStartPosition(int morphSamples, int crossfadeSamples, unsigned int cycle)
+{
+    constexpr int quantum = 128;
+    const int maxStart = juce::jmax(0, morphSamples / 2 - crossfadeSamples);
+    const int slotCount = maxStart / quantum + 1;
+    if (slotCount <= 1)
+        return 0;
+
+    cycle += 0x9e3779b9u;
+    cycle ^= cycle >> 16;
+    cycle *= 0x7feb352du;
+    cycle ^= cycle >> 15;
+    return static_cast<int>(cycle % static_cast<unsigned int>(slotCount)) * quantum;
+}
+
 struct MorphDefaults
 {
     float temperature = 0.47f;
@@ -346,6 +371,9 @@ NeuralMorphingAudioProcessor::~NeuralMorphingAudioProcessor()
     for (const auto* parameterId : morphTokenParameterIds)
         parameters.removeParameterListener(parameterId, this);
 
+    demoCaptureSamplesRemaining_.store(0, std::memory_order_release);
+    demoCaptureWriter_.reset();
+    demoCaptureThread_.stopThread(2000);
     shutdownWorkers();
 }
 
@@ -356,14 +384,22 @@ const juce::String NeuralMorphingAudioProcessor::getName() const
 
 void NeuralMorphingAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
+    demoCaptureSamplesRemaining_.store(0, std::memory_order_release);
+    demoCaptureWriter_.reset();
+    demoCaptureThread_.stopThread(2000);
+
     currentSampleRate_ = sampleRate;
     samplesPerBlock_ = samplesPerBlock;
     configureRealtimeTimings();
     morphUpdateCountdownSamples_ = 0;
     hasLastRealtimeMorphBlock_ = false;
+    hasPendingRealtimeMorphBlock_ = false;
     lastRealtimeMorphBlock_.setSize(0, 0);
+    pendingRealtimeMorphBlock_.setSize(0, 0);
     lastRealtimeMorphReadPosition_ = 0;
     lastRealtimeMorphWasUnderrun_ = false;
+    wetLoopStartPosition_ = 0;
+    wetLoopCycle_ = 0;
     wetAvailabilityMix_ = 0.0f;
     outputSafetyGain_ = 1.0f;
     qualityTailValid_ = false;
@@ -381,6 +417,35 @@ void NeuralMorphingAudioProcessor::prepareToPlay(double sampleRate, int samplesP
 
     currentLatencySamples_ = currentLatencySamplesForMode();
     setLatencySamples(currentLatencySamples_);
+
+    const auto capturePath = juce::SystemStats::getEnvironmentVariable("NEURAL_MORPHING_DEMO_CAPTURE_FILE", {});
+    if (capturePath.isNotEmpty())
+    {
+        juce::File captureFile(capturePath.trim().unquoted());
+        captureFile.getParentDirectory().createDirectory();
+        captureFile.deleteFile();
+        juce::WavAudioFormat wavFormat;
+        if (auto stream = captureFile.createOutputStream())
+        {
+            std::unique_ptr<juce::AudioFormatWriter> writer(wavFormat.createWriterFor(
+                stream.release(),
+                sampleRate,
+                static_cast<unsigned int>(juce::jmax(1, getTotalNumOutputChannels())),
+                32,
+                {},
+                0));
+            if (writer != nullptr)
+            {
+                demoCaptureThread_.startThread();
+                demoCaptureWriter_ = std::make_unique<juce::AudioFormatWriter::ThreadedWriter>(
+                    writer.release(), demoCaptureThread_, juce::jmax(32768, samplesPerBlock * 8));
+                const int seconds = getEnvIntClamped("NEURAL_MORPHING_DEMO_CAPTURE_SECONDS", 12, 1, 120);
+                demoCaptureSamplesRemaining_.store(
+                    static_cast<int64_t>(std::lround(sampleRate * static_cast<double>(seconds))),
+                    std::memory_order_release);
+            }
+        }
+    }
 }
 
 void NeuralMorphingAudioProcessor::releaseResources()
@@ -468,6 +533,8 @@ void NeuralMorphingAudioProcessor::configureRealtimeTimings()
     qualityTailBuffer_.clear();
     qualityTailValid_ = false;
     lastRealtimeMorphWasUnderrun_ = false;
+    wetLoopStartPosition_ = 0;
+    wetLoopCycle_ = 0;
 }
 
 int NeuralMorphingAudioProcessor::currentLatencySamplesForMode() const
@@ -507,9 +574,13 @@ void NeuralMorphingAudioProcessor::clearRealtimeSessionState(bool clearHistoryBu
     morphRevision_.fetch_add(1, std::memory_order_acq_rel);
     targetSegments_.clear();
     hasLastRealtimeMorphBlock_ = false;
+    hasPendingRealtimeMorphBlock_ = false;
     lastRealtimeMorphBlock_.setSize(0, 0);
+    pendingRealtimeMorphBlock_.setSize(0, 0);
     lastRealtimeMorphReadPosition_ = 0;
     lastRealtimeMorphWasUnderrun_ = false;
+    wetLoopStartPosition_ = 0;
+    wetLoopCycle_ = 0;
     morphUpdateCountdownSamples_ = 0;
     decodedFifo_.clear();
     if (clearHistoryBuffer)
@@ -775,21 +846,67 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
                 {
                     if (latestMorphed.getNumChannels() <= 0 || latestMorphed.getNumSamples() <= 0)
                         continue;
-                    wetTransitionPending_ = hasLastRealtimeMorphBlock_;
-                    lastRealtimeMorphBlock_.makeCopyOf(latestMorphed);
-                    hasLastRealtimeMorphBlock_ = true;
+
+                    if (!hasLastRealtimeMorphBlock_)
+                    {
+                        std::swap(lastRealtimeMorphBlock_, latestMorphed);
+                        hasLastRealtimeMorphBlock_ = true;
+                        lastRealtimeMorphReadPosition_ = 0;
+                        lastRealtimeMorphWasUnderrun_ = false;
+                        wetLoopStartPosition_ = 0;
+                        wetLoopCycle_ = 0;
+                    }
+                    else
+                    {
+                        std::swap(pendingRealtimeMorphBlock_, latestMorphed);
+                        hasPendingRealtimeMorphBlock_ = true;
+                    }
+                }
+
+                if (lastRealtimeMorphWasUnderrun_ && hasPendingRealtimeMorphBlock_)
+                {
+                    std::swap(lastRealtimeMorphBlock_, pendingRealtimeMorphBlock_);
+                    hasPendingRealtimeMorphBlock_ = false;
                     lastRealtimeMorphReadPosition_ = 0;
                     lastRealtimeMorphWasUnderrun_ = false;
+                    wetLoopStartPosition_ = 0;
+                    wetLoopCycle_ = 0;
+                    wetTransitionPending_ = true;
                 }
 
                 if (hasLastRealtimeMorphBlock_ && lastRealtimeMorphBlock_.getNumSamples() > 0)
                 {
+                    const int morphSamples = lastRealtimeMorphBlock_.getNumSamples();
+                    const int loopCrossfadeSamples = wetLoopCrossfadeSamples(currentSampleRate_, morphSamples);
+                    const auto beginWetLoop = [&]()
+                    {
+                        if (!lastRealtimeMorphWasUnderrun_)
+                            wetLoopStartPosition_ = chooseWetLoopStartPosition(
+                                morphSamples, loopCrossfadeSamples, wetLoopCycle_++);
+                        lastRealtimeMorphWasUnderrun_ = true;
+                    };
                     const bool enoughWetSamples = lastRealtimeMorphReadPosition_ + numSamples <= lastRealtimeMorphBlock_.getNumSamples();
                     if (!enoughWetSamples)
                     {
-                        lastRealtimeMorphWasUnderrun_ = true;
-                        wetTransitionPending_ = true;
-                        lastRealtimeMorphReadPosition_ = 0;
+                        if (hasPendingRealtimeMorphBlock_)
+                        {
+                            std::swap(lastRealtimeMorphBlock_, pendingRealtimeMorphBlock_);
+                            hasPendingRealtimeMorphBlock_ = false;
+                            lastRealtimeMorphWasUnderrun_ = false;
+                            lastRealtimeMorphReadPosition_ = 0;
+                            wetLoopStartPosition_ = 0;
+                            wetLoopCycle_ = 0;
+                            wetTransitionPending_ = true;
+                        }
+                        else
+                        {
+                            beginWetLoop();
+                        }
+                    }
+                    else if (!hasPendingRealtimeMorphBlock_
+                             && lastRealtimeMorphReadPosition_ + numSamples + loopCrossfadeSamples >= morphSamples)
+                    {
+                        beginWetLoop();
                     }
                     morphWetState_.store(lastRealtimeMorphWasUnderrun_ ? 3 : 2, std::memory_order_release);
                     updateWetAvailability(true, numSamples);
@@ -823,7 +940,26 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
     const float outputGain = juce::Decibels::decibelsToGain(getParam("outputGain"));
     buffer.applyGain(outputGain);
     applySafetyLimiter(buffer);
+    const int64_t captureRemaining = demoCaptureSamplesRemaining_.load(std::memory_order_acquire);
+    const int wetState = morphWetState_.load(std::memory_order_acquire);
+    if (captureRemaining > 0 && demoCaptureWriter_ != nullptr
+        && (wetState == 2 || wetState == 3))
+    {
+        const int captureSamples = static_cast<int>(juce::jmin<int64_t>(numSamples, captureRemaining));
+        if (demoCaptureWriter_->write(buffer.getArrayOfReadPointers(), captureSamples))
+            demoCaptureSamplesRemaining_.fetch_sub(captureSamples, std::memory_order_acq_rel);
+    }
     outputAudioFingerprint_.store(audioFingerprint(buffer), std::memory_order_release);
+}
+
+void NeuralMorphingAudioProcessor::flushDemoRealtimeCapture()
+{
+    if (demoCaptureWriter_ != nullptr
+        && demoCaptureSamplesRemaining_.load(std::memory_order_acquire) <= 0)
+    {
+        demoCaptureWriter_.reset();
+        demoCaptureThread_.stopThread(2000);
+    }
 }
 
 juce::AudioProcessorEditor* NeuralMorphingAudioProcessor::createEditor()
@@ -1677,6 +1813,11 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
 
     const int morphSamples = morphed.getNumSamples();
     const int readStart = juce::jlimit(0, juce::jmax(0, morphSamples), lastRealtimeMorphReadPosition_);
+    const bool loopWet = lastRealtimeMorphWasUnderrun_;
+    const int loopCrossfadeSamples = loopWet ? wetLoopCrossfadeSamples(currentSampleRate_, morphSamples) : 0;
+    const int loopStart = juce::jlimit(0, juce::jmax(0, morphSamples - loopCrossfadeSamples), wetLoopStartPosition_);
+    const int loopResumePosition = loopStart + loopCrossfadeSamples;
+    const int loopSpan = morphSamples - loopResumePosition;
     if (wetTransitionPending_)
     {
         std::copy(lastWetOutputSample_.begin(), lastWetOutputSample_.end(), wetTransitionFromSample_.begin());
@@ -1710,9 +1851,19 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
         for (int sample = 0; sample < numSamples; ++sample)
         {
             const float drySample = dryBuffer.getSample(dryCh, sample);
-            const int morphLinearIndex = readStart + sample;
+            int morphLinearIndex = readStart + sample;
+            if (loopWet && loopSpan > 0 && morphLinearIndex >= morphSamples)
+                morphLinearIndex = loopResumePosition + ((morphLinearIndex - morphSamples) % loopSpan);
             const bool hasMorphSample = morphLinearIndex < morphSamples;
             float morphSample = hasMorphSample ? morphed.getSample(morphCh, morphLinearIndex) : 0.0f;
+            if (loopCrossfadeSamples > 0 && morphLinearIndex >= morphSamples - loopCrossfadeSamples)
+            {
+                const int headIndex = morphLinearIndex - (morphSamples - loopCrossfadeSamples);
+                const float alpha = static_cast<float>(headIndex + 1)
+                                    / static_cast<float>(loopCrossfadeSamples + 1);
+                morphSample = morphSample * (1.0f - alpha)
+                              + morphed.getSample(morphCh, loopStart + headIndex) * alpha;
+            }
             morphSample = processWetHighPass(
                 morphSample,
                 highPassCoefficients,
@@ -1763,7 +1914,16 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
     }
 
     if (morphSamples > 0)
-        lastRealtimeMorphReadPosition_ = juce::jmin(readStart + numSamples, morphSamples);
+    {
+        const int nextReadPosition = readStart + numSamples;
+        const bool wrapped = loopWet && loopSpan > 0 && nextReadPosition >= morphSamples;
+        lastRealtimeMorphReadPosition_ = wrapped
+                                             ? loopResumePosition + ((nextReadPosition - morphSamples) % loopSpan)
+                                             : juce::jmin(nextReadPosition, morphSamples);
+        if (wrapped)
+            wetLoopStartPosition_ = chooseWetLoopStartPosition(
+                morphSamples, loopCrossfadeSamples, wetLoopCycle_++);
+    }
     wetTransitionRemainingSamples_ = juce::jmax(0, transitionRemainingAtStart - numSamples);
 
     if (wetSampleCount > 0)
