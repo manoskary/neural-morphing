@@ -2,6 +2,7 @@
 #include "PluginEditor.h"
 #include "JuceHeader.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <random>
@@ -26,6 +27,21 @@ constexpr int kQualityCrossfadeSamplesDefault = 4096;
 constexpr int kLiveCandidateCountDefault = 48;
 constexpr int kLiveBeamWidthDefault = 6;
 constexpr double kWetHighPassCutoffHz = 50.0;
+constexpr int kLatentMorphStages = 9;
+constexpr size_t kFusionCrossoverCount = 4;
+constexpr size_t kFusionBandCount = kFusionCrossoverCount + 1;
+constexpr std::array<double, kFusionCrossoverCount> kFusionCrossoversHz{
+    160.0, 500.0, 1500.0, 4500.0
+};
+constexpr std::array<float, kFusionBandCount> kFusionBandLeads{
+    -0.12f, -0.02f, 0.14f, 0.34f, 0.56f
+};
+constexpr std::array<float, kFusionBandCount> kFusionTransientWeights{
+    0.20f, 0.35f, 0.55f, 0.80f, 1.00f
+};
+
+using FusionBands = std::array<float, kFusionBandCount>;
+using FusionCoefficients = std::array<float, kFusionCrossoverCount>;
 
 struct WetHighPassCoefficients
 {
@@ -65,6 +81,131 @@ float processWetHighPass(float input,
     state1 = coefficients.b1 * input - coefficients.a1 * output + state2;
     state2 = coefficients.b2 * input - coefficients.a2 * output;
     return output;
+}
+
+struct MorphMixGains
+{
+    float dry = 1.0f;
+    float wet = 0.0f;
+};
+
+MorphMixGains equalPowerMixGains(float dryWet)
+{
+    dryWet = juce::jlimit(0.0f, 1.0f, dryWet);
+    if (dryWet <= 0.0f)
+        return { 1.0f, 0.0f };
+    if (dryWet >= 1.0f)
+        return { 0.0f, 1.0f };
+
+    const float angle = dryWet * juce::MathConstants<float>::pi * 0.5f;
+    return { std::cos(angle), std::sin(angle) };
+}
+
+MorphMixGains transientAwareMixGains(const MorphMixGains& base, float transient)
+{
+    transient = juce::jlimit(0.0f, 1.0f, transient);
+    return {
+        juce::jmin(1.0f, base.dry * (1.0f + 0.75f * base.wet * transient)),
+        base.wet * (1.0f - 0.25f * base.dry * transient)
+    };
+}
+
+float updateEnvelopeFollower(float magnitude, float& state, float attack, float release)
+{
+    const float coefficient = magnitude > state ? attack : release;
+    state = coefficient * state + (1.0f - coefficient) * magnitude;
+    return state;
+}
+
+int latentMorphStage(float dryWet)
+{
+    dryWet = juce::jlimit(0.0f, 1.0f, dryWet);
+    int stage = 0;
+    for (int index = 0; index < kLatentMorphStages; ++index)
+    {
+        const float threshold = 0.08f + 0.84f * static_cast<float>(index)
+                                             / static_cast<float>(kLatentMorphStages - 1);
+        if (dryWet + 1.0e-6f >= threshold)
+            ++stage;
+    }
+    return stage;
+}
+
+int paletteCodebookCount(float dryWet, int codebooks)
+{
+    if (codebooks <= 0)
+        return 0;
+
+    const int stage = latentMorphStage(dryWet);
+    return juce::jlimit(
+        0,
+        codebooks,
+        static_cast<int>(std::lround(static_cast<double>(stage * codebooks)
+                                     / static_cast<double>(kLatentMorphStages))));
+}
+
+void applyLatentFusion(const TokenBlock& source, TokenBlock& palette, float dryWet)
+{
+    if (source.codebooks != palette.codebooks || source.frames != palette.frames
+        || source.tokens.size() != palette.tokens.size())
+        return;
+
+    const int paletteCount = paletteCodebookCount(dryWet, palette.codebooks);
+    const int firstPaletteCodebook = palette.codebooks - paletteCount;
+    for (int codebook = 0; codebook < firstPaletteCodebook; ++codebook)
+    {
+        for (int frame = 0; frame < palette.frames; ++frame)
+        {
+            const auto index = static_cast<size_t>(palette.index(codebook, frame));
+            palette.tokens[index] = source.tokens[index];
+        }
+    }
+}
+
+float fusionBandMix(float dryWet, size_t band)
+{
+    dryWet = juce::jlimit(0.0f, 1.0f, dryWet);
+    if (dryWet <= 0.0f || dryWet >= 1.0f)
+        return dryWet;
+
+    const float arc = std::sin(dryWet * juce::MathConstants<float>::pi);
+    const float trajectory = arc * std::sqrt(1.0f - dryWet);
+    return juce::jlimit(0.0f, 1.0f, dryWet + kFusionBandLeads[band] * trajectory);
+}
+
+FusionCoefficients makeFusionLowPassCoefficients(double sampleRate)
+{
+    FusionCoefficients coefficients{};
+    for (size_t index = 0; index < coefficients.size(); ++index)
+    {
+        const double crossoverHz = kFusionCrossoversHz[index];
+        coefficients[index] = sampleRate > 2.0 * crossoverHz
+                                  ? static_cast<float>(std::exp(
+                                        -juce::MathConstants<double>::twoPi * crossoverHz / sampleRate))
+                                  : 0.0f;
+    }
+    return coefficients;
+}
+
+float updateLowBand(float input, float coefficient, float& state)
+{
+    state = coefficient * state + (1.0f - coefficient) * input;
+    return state;
+}
+
+void splitFusionBands(float input,
+                      const FusionCoefficients& coefficients,
+                      float* states,
+                      FusionBands& bands)
+{
+    float previousLow = 0.0f;
+    for (size_t index = 0; index < coefficients.size(); ++index)
+    {
+        const float low = updateLowBand(input, coefficients[index], states[index]);
+        bands[index] = low - previousLow;
+        previousLow = low;
+    }
+    bands.back() = input - previousLow;
 }
 
 int wetLoopCrossfadeSamples(double sampleRate, int morphSamples)
@@ -249,21 +390,26 @@ float bufferRms(const juce::AudioBuffer<float>& buffer)
     return std::sqrt(static_cast<float>(energy / count));
 }
 
-void matchWetLoudness(const juce::AudioBuffer<float>& source, juce::AudioBuffer<float>& wet)
+void matchWetLoudness(const juce::AudioBuffer<float>& source,
+                      juce::AudioBuffer<float>& wet,
+                      double sampleRate)
 {
     const float sourceRms = bufferRms(source);
-    const float wetRms = bufferRms(wet);
-    if (sourceRms > 1.0e-4f && wetRms > 1.0e-4f)
+    juce::AudioBuffer<float> filteredWet;
+    filteredWet.makeCopyOf(wet, true);
+    const auto highPassCoefficients = makeWetHighPassCoefficients(sampleRate);
+    for (int channel = 0; channel < filteredWet.getNumChannels(); ++channel)
     {
-        float wetPeak = 0.0f;
-        for (int channel = 0; channel < wet.getNumChannels(); ++channel)
-            wetPeak = juce::jmax(wetPeak, wet.getMagnitude(channel, 0, wet.getNumSamples()));
-
-        constexpr float targetPeak = 0.8912509f;
-        const float peakSafeGain = wetPeak > 1.0e-5f ? targetPeak / wetPeak : 1.0f;
-        const float maximumGain = juce::jmin(32.0f, peakSafeGain);
-        wet.applyGain(juce::jlimit(0.25f, juce::jmax(0.25f, maximumGain), sourceRms / wetRms));
+        float state1 = 0.0f;
+        float state2 = 0.0f;
+        auto* samples = filteredWet.getWritePointer(channel);
+        for (int sample = 0; sample < filteredWet.getNumSamples(); ++sample)
+            samples[sample] = processWetHighPass(samples[sample], highPassCoefficients, state1, state2);
     }
+
+    const float wetRms = bufferRms(filteredWet);
+    if (sourceRms > 1.0e-4f && wetRms > 1.0e-4f)
+        wet.applyGain(juce::jlimit(0.25f, 64.0f, sourceRms / wetRms));
 }
 
 void mixOfflineMorphedAudio(juce::AudioBuffer<float>& output,
@@ -275,20 +421,34 @@ void mixOfflineMorphedAudio(juce::AudioBuffer<float>& output,
 {
     dryWet = juce::jlimit(0.0f, 1.0f, dryWet);
     envelopeAmount = juce::jlimit(0.0f, 1.0f, envelopeAmount);
-    const float dryGain = 1.0f - dryWet;
-    const float wetGain = dryWet;
-    const float attack = sampleRate > 0.0 ? std::exp(-1.0f / (0.005f * static_cast<float>(sampleRate))) : 0.0f;
-    const float release = sampleRate > 0.0 ? std::exp(-1.0f / (0.080f * static_cast<float>(sampleRate))) : 0.0f;
+    std::array<MorphMixGains, kFusionBandCount> baseGains;
+    for (size_t band = 0; band < baseGains.size(); ++band)
+        baseGains[band] = equalPowerMixGains(fusionBandMix(dryWet, band));
+
+    const float morphArc = std::sin(dryWet * juce::MathConstants<float>::pi);
+    const float bandEnvelopeAmount = juce::jlimit(0.0f, 1.0f, envelopeAmount + 0.45f * morphArc);
+    const float transientThreadGain = 0.18f * morphArc;
+    const float fastAttack = sampleRate > 0.0 ? std::exp(-1.0f / (0.005f * static_cast<float>(sampleRate))) : 0.0f;
+    const float fastRelease = sampleRate > 0.0 ? std::exp(-1.0f / (0.080f * static_cast<float>(sampleRate))) : 0.0f;
+    const float slowAttack = sampleRate > 0.0 ? std::exp(-1.0f / (0.040f * static_cast<float>(sampleRate))) : 0.0f;
+    const float slowRelease = sampleRate > 0.0 ? std::exp(-1.0f / (0.160f * static_cast<float>(sampleRate))) : 0.0f;
     const auto highPassCoefficients = makeWetHighPassCoefficients(sampleRate);
+    const auto fusionCoefficients = makeFusionLowPassCoefficients(sampleRate);
 
     for (int channel = 0; channel < output.getNumChannels(); ++channel)
     {
         const int sourceChannel = juce::jmin(channel, source.getNumChannels() - 1);
         const int wetChannel = juce::jmin(channel, wet.getNumChannels() - 1);
         float sourceEnvelope = 0.0f;
-        float wetEnvelope = 0.0f;
+        float sourceSlowEnvelope = 0.0f;
         float highPassState1 = 0.0f;
         float highPassState2 = 0.0f;
+        std::array<float, kFusionCrossoverCount> sourceCrossoverStates{};
+        std::array<float, kFusionCrossoverCount> wetCrossoverStates{};
+        std::array<float, kFusionBandCount> sourceBandEnvelopes{};
+        std::array<float, kFusionBandCount> wetBandEnvelopes{};
+        FusionBands sourceBands{};
+        FusionBands wetBands{};
 
         for (int sample = 0; sample < output.getNumSamples(); ++sample)
         {
@@ -296,19 +456,37 @@ void mixOfflineMorphedAudio(juce::AudioBuffer<float>& output,
             float wetSample = sample < wet.getNumSamples() ? wet.getSample(wetChannel, sample) : 0.0f;
             wetSample = processWetHighPass(wetSample, highPassCoefficients, highPassState1, highPassState2);
 
-            if (envelopeAmount > 0.0f)
+            const float sourceMagnitude = std::abs(sourceSample);
+            updateEnvelopeFollower(sourceMagnitude, sourceEnvelope, fastAttack, fastRelease);
+            updateEnvelopeFollower(sourceMagnitude, sourceSlowEnvelope, slowAttack, slowRelease);
+            const float transient = juce::jlimit(
+                0.0f, 1.0f, (sourceEnvelope - sourceSlowEnvelope) / (sourceEnvelope + 0.02f));
+
+            splitFusionBands(sourceSample, fusionCoefficients, sourceCrossoverStates.data(), sourceBands);
+            splitFusionBands(wetSample, fusionCoefficients, wetCrossoverStates.data(), wetBands);
+
+            float mixedSample = 0.0f;
+            for (size_t band = 0; band < kFusionBandCount; ++band)
             {
-                const float sourceMagnitude = std::abs(sourceSample);
-                const float wetMagnitude = std::abs(wetSample);
-                const float sourceCoefficient = sourceMagnitude > sourceEnvelope ? attack : release;
-                const float wetCoefficient = wetMagnitude > wetEnvelope ? attack : release;
-                sourceEnvelope = sourceCoefficient * sourceEnvelope + (1.0f - sourceCoefficient) * sourceMagnitude;
-                wetEnvelope = wetCoefficient * wetEnvelope + (1.0f - wetCoefficient) * wetMagnitude;
-                const float envelopeGain = juce::jlimit(0.0f, 4.0f, sourceEnvelope / (wetEnvelope + 1.0e-4f));
-                wetSample *= 1.0f + envelopeAmount * (envelopeGain - 1.0f);
+                updateEnvelopeFollower(
+                    std::abs(sourceBands[band]), sourceBandEnvelopes[band], fastAttack, fastRelease);
+                updateEnvelopeFollower(
+                    std::abs(wetBands[band]), wetBandEnvelopes[band], fastAttack, fastRelease);
+
+                const float envelopeGain = juce::jlimit(
+                    0.25f,
+                    4.0f,
+                    sourceBandEnvelopes[band] / (wetBandEnvelopes[band] + 1.0e-4f));
+                const float shapedWet = wetBands[band]
+                                        * (1.0f + bandEnvelopeAmount * (envelopeGain - 1.0f));
+                auto gains = transientAwareMixGains(baseGains[band], transient);
+                gains.dry = juce::jmin(
+                    1.0f,
+                    gains.dry + transientThreadGain * kFusionTransientWeights[band] * transient);
+                mixedSample += gains.dry * sourceBands[band] + gains.wet * shapedWet;
             }
 
-            output.setSample(channel, sample, dryGain * sourceSample + wetGain * wetSample);
+            output.setSample(channel, sample, mixedSample);
         }
     }
 }
@@ -333,7 +511,8 @@ constexpr const char* morphTokenParameterIds[] = {
     "unit",
     "stride",
     "swapMode",
-    "processingMode"
+    "processingMode",
+    "dryWet"
 };
 }
 
@@ -356,6 +535,7 @@ NeuralMorphingAudioProcessor::NeuralMorphingAudioProcessor()
                                  != 0;
 
     applyDacDemoDefaults();
+    latentMorphStage_.store(latentMorphStage(getParam("dryWet")), std::memory_order_release);
     for (const auto* parameterId : morphTokenParameterIds)
         parameters.addParameterListener(parameterId, this);
 
@@ -764,6 +944,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
     }
     dryScratch_.makeCopyOf(buffer, true);
     const float dryWet = juce::jlimit(0.0f, 1.0f, getParam("dryWet"));
+    const float unavailableWetDryGain = equalPowerMixGains(dryWet).dry;
 
     // Hard bypass: if fully dry, avoid bridge/model work in the realtime callback.
     if (dryWet <= 0.0f)
@@ -810,7 +991,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
             morphWetState_.store(0, std::memory_order_release);
             updateWetAvailability(false, numSamples);
             buffer.makeCopyOf(dryScratch_, true);
-            buffer.applyGain(1.0f - dryWet);
+            buffer.applyGain(unavailableWetDryGain);
         }
         else
         {
@@ -917,7 +1098,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
                     morphWetState_.store(1, std::memory_order_release);
                     updateWetAvailability(false, numSamples);
                     buffer.makeCopyOf(dryScratch_, true);
-                    buffer.applyGain(1.0f - dryWet);
+                    buffer.applyGain(unavailableWetDryGain);
                 }
             }
             else
@@ -925,7 +1106,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
                 clearRealtimeSessionState(true);
                 morphWetState_.store(4, std::memory_order_release);
                 buffer.makeCopyOf(dryScratch_, true);
-                buffer.applyGain(1.0f - dryWet);
+                buffer.applyGain(unavailableWetDryGain);
             }
         }
     }
@@ -934,7 +1115,7 @@ void NeuralMorphingAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer
         morphWetState_.store(0, std::memory_order_release);
         updateWetAvailability(false, numSamples);
         buffer.makeCopyOf(dryScratch_, true);
-        buffer.applyGain(1.0f - dryWet);
+        buffer.applyGain(unavailableWetDryGain);
     }
 
     const float outputGain = juce::Decibels::decibelsToGain(getParam("outputGain"));
@@ -999,8 +1180,15 @@ float NeuralMorphingAudioProcessor::getParam(const juce::String& paramID) const
     return 0.0f;
 }
 
-void NeuralMorphingAudioProcessor::parameterChanged(const juce::String& parameterID, float)
+void NeuralMorphingAudioProcessor::parameterChanged(const juce::String& parameterID, float newValue)
 {
+    if (parameterID == "dryWet")
+    {
+        const int stage = latentMorphStage(newValue);
+        if (latentMorphStage_.exchange(stage, std::memory_order_acq_rel) == stage)
+            return;
+    }
+
     morphRevision_.fetch_add(1, std::memory_order_acq_rel);
     morphRefreshPending_.store(true, std::memory_order_release);
     lastMatchedIndex_.store(-1, std::memory_order_release);
@@ -1126,7 +1314,11 @@ void NeuralMorphingAudioProcessor::resetMorphSmoothing()
 {
     const auto channels = static_cast<size_t>(juce::jmax(1, getTotalNumOutputChannels()));
     sourceEnvelopeState_.assign(channels, 0.0f);
-    wetEnvelopeState_.assign(channels, 0.0f);
+    sourceTransientSlowState_.assign(channels, 0.0f);
+    sourceCrossoverState_.assign(channels * kFusionCrossoverCount, 0.0f);
+    wetCrossoverState_.assign(channels * kFusionCrossoverCount, 0.0f);
+    sourceBandEnvelopeState_.assign(channels * kFusionBandCount, 0.0f);
+    wetBandEnvelopeState_.assign(channels * kFusionBandCount, 0.0f);
     wetHighPassState1_.assign(channels, 0.0f);
     wetHighPassState2_.assign(channels, 0.0f);
     lastWetOutputSample_.assign(channels, 0.0f);
@@ -1177,6 +1369,7 @@ uint64_t NeuralMorphingAudioProcessor::hashMorphKey(const TokenBlock& block, dou
     mix(static_cast<uint64_t>(std::lround(getParam("rvqFocus") * 1000.0f)));
     mix(static_cast<uint64_t>(std::lround(getParam("similarity") * 1000.0f)));
     mix(static_cast<uint64_t>(std::lround(getParam("swapMode"))));
+    mix(static_cast<uint64_t>(latentMorphStage(getParam("dryWet"))));
     mix(static_cast<uint64_t>(std::lround(getParam("processingMode"))));
     mix(static_cast<uint64_t>(std::lround(outputSampleRate)));
 
@@ -1315,6 +1508,7 @@ TokenBlock NeuralMorphingAudioProcessor::buildMatchedTokenBlock(const TokenBlock
                 }
             }
         }
+        applyLatentFusion(targetBlock, result, getParam("dryWet"));
         return result;
     }
 
@@ -1784,6 +1978,7 @@ TokenBlock NeuralMorphingAudioProcessor::buildMatchedTokenBlock(const TokenBlock
         }
     }
 
+    applyLatentFusion(targetBlock, result, getParam("dryWet"));
     return result;
 }
 
@@ -1798,13 +1993,21 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
         return;
 
     const float dryWet = juce::jlimit(0.0f, 1.0f, getParam("dryWet"));
-    const float dryGain = 1.0f - dryWet;
-    const float wetGain = dryWet;
+    std::array<MorphMixGains, kFusionBandCount> baseGains;
+    for (size_t band = 0; band < baseGains.size(); ++band)
+        baseGains[band] = equalPowerMixGains(fusionBandMix(dryWet, band));
+
+    const float morphArc = std::sin(dryWet * juce::MathConstants<float>::pi);
     const float envelopeAmount = juce::jlimit(0.0f, 1.0f, getParam("envelopeFollow"));
-    const bool followEnvelope = envelopeAmount > 0.0f && currentSampleRate_ > 0.0;
+    const float bandEnvelopeAmount = juce::jlimit(0.0f, 1.0f, envelopeAmount + 0.45f * morphArc);
+    const float transientThreadGain = 0.18f * morphArc;
 
     if (sourceEnvelopeState_.size() < static_cast<size_t>(totalNumOutputChannels)
-        || wetEnvelopeState_.size() < static_cast<size_t>(totalNumOutputChannels)
+        || sourceTransientSlowState_.size() < static_cast<size_t>(totalNumOutputChannels)
+        || sourceCrossoverState_.size() < static_cast<size_t>(totalNumOutputChannels) * kFusionCrossoverCount
+        || wetCrossoverState_.size() < static_cast<size_t>(totalNumOutputChannels) * kFusionCrossoverCount
+        || sourceBandEnvelopeState_.size() < static_cast<size_t>(totalNumOutputChannels) * kFusionBandCount
+        || wetBandEnvelopeState_.size() < static_cast<size_t>(totalNumOutputChannels) * kFusionBandCount
         || wetHighPassState1_.size() < static_cast<size_t>(totalNumOutputChannels)
         || wetHighPassState2_.size() < static_cast<size_t>(totalNumOutputChannels))
     {
@@ -1831,22 +2034,39 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
     const int transitionRemainingAtStart = wetTransitionRemainingSamples_;
     double wetEnergy = 0.0;
     int wetSampleCount = 0;
-    const float attack = followEnvelope
-                             ? std::exp(-1.0f / (0.005f * static_cast<float>(currentSampleRate_)))
-                             : 0.0f;
-    const float release = followEnvelope
-                              ? std::exp(-1.0f / (0.080f * static_cast<float>(currentSampleRate_)))
-                              : 0.0f;
+    const float fastAttack = currentSampleRate_ > 0.0
+                                 ? std::exp(-1.0f / (0.005f * static_cast<float>(currentSampleRate_)))
+                                 : 0.0f;
+    const float fastRelease = currentSampleRate_ > 0.0
+                                  ? std::exp(-1.0f / (0.080f * static_cast<float>(currentSampleRate_)))
+                                  : 0.0f;
+    const float slowAttack = currentSampleRate_ > 0.0
+                                 ? std::exp(-1.0f / (0.040f * static_cast<float>(currentSampleRate_)))
+                                 : 0.0f;
+    const float slowRelease = currentSampleRate_ > 0.0
+                                  ? std::exp(-1.0f / (0.160f * static_cast<float>(currentSampleRate_)))
+                                  : 0.0f;
     const auto highPassCoefficients = makeWetHighPassCoefficients(currentSampleRate_);
+    const auto fusionCoefficients = makeFusionLowPassCoefficients(currentSampleRate_);
 
     for (int ch = 0; ch < totalNumOutputChannels; ++ch)
     {
         const int morphCh = juce::jmin(ch, morphed.getNumChannels() - 1);
         const int dryCh = juce::jmin(ch, dryBuffer.getNumChannels() - 1);
         float sourceEnvelope = sourceEnvelopeState_[static_cast<size_t>(ch)];
-        float wetEnvelope = wetEnvelopeState_[static_cast<size_t>(ch)];
+        float sourceSlowEnvelope = sourceTransientSlowState_[static_cast<size_t>(ch)];
         float highPassState1 = wetHighPassState1_[static_cast<size_t>(ch)];
         float highPassState2 = wetHighPassState2_[static_cast<size_t>(ch)];
+        auto* sourceCrossoverStates = sourceCrossoverState_.data()
+                                      + static_cast<size_t>(ch) * kFusionCrossoverCount;
+        auto* wetCrossoverStates = wetCrossoverState_.data()
+                                   + static_cast<size_t>(ch) * kFusionCrossoverCount;
+        auto* sourceBandEnvelopes = sourceBandEnvelopeState_.data()
+                                    + static_cast<size_t>(ch) * kFusionBandCount;
+        auto* wetBandEnvelopes = wetBandEnvelopeState_.data()
+                                 + static_cast<size_t>(ch) * kFusionBandCount;
+        FusionBands sourceBands{};
+        FusionBands wetBands{};
 
         for (int sample = 0; sample < numSamples; ++sample)
         {
@@ -1870,6 +2090,12 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
                 highPassState1,
                 highPassState2);
 
+            const float sourceMagnitude = std::abs(drySample);
+            updateEnvelopeFollower(sourceMagnitude, sourceEnvelope, fastAttack, fastRelease);
+            updateEnvelopeFollower(sourceMagnitude, sourceSlowEnvelope, slowAttack, slowRelease);
+            const float transient = juce::jlimit(
+                0.0f, 1.0f, (sourceEnvelope - sourceSlowEnvelope) / (sourceEnvelope + 0.02f));
+
             if (sample < transitionRemainingAtStart)
             {
                 const int progress = wetTransitionTotalSamples_ - transitionRemainingAtStart + sample + 1;
@@ -1879,36 +2105,40 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
                               + morphSample * alpha;
             }
 
-            if (followEnvelope)
-            {
-                const float sourceMagnitude = std::abs(drySample);
-                const float wetMagnitude = std::abs(morphSample);
-                const float sourceCoefficient = sourceMagnitude > sourceEnvelope ? attack : release;
-                const float wetCoefficient = wetMagnitude > wetEnvelope ? attack : release;
-                sourceEnvelope = sourceCoefficient * sourceEnvelope + (1.0f - sourceCoefficient) * sourceMagnitude;
-                wetEnvelope = wetCoefficient * wetEnvelope + (1.0f - wetCoefficient) * wetMagnitude;
+            lastWetOutputSample_[static_cast<size_t>(ch)] = morphSample;
+            splitFusionBands(drySample, fusionCoefficients, sourceCrossoverStates, sourceBands);
+            splitFusionBands(morphSample, fusionCoefficients, wetCrossoverStates, wetBands);
 
-                const float targetGain = juce::jlimit(0.0f, 4.0f, sourceEnvelope / (wetEnvelope + 1.0e-4f));
-                morphSample *= 1.0f + envelopeAmount * (targetGain - 1.0f);
+            float mixedSample = 0.0f;
+            float shapedWetSample = 0.0f;
+            for (size_t band = 0; band < kFusionBandCount; ++band)
+            {
+                updateEnvelopeFollower(
+                    std::abs(sourceBands[band]), sourceBandEnvelopes[band], fastAttack, fastRelease);
+                updateEnvelopeFollower(
+                    std::abs(wetBands[band]), wetBandEnvelopes[band], fastAttack, fastRelease);
+
+                const float envelopeGain = juce::jlimit(
+                    0.25f,
+                    4.0f,
+                    sourceBandEnvelopes[band] / (wetBandEnvelopes[band] + 1.0e-4f));
+                const float shapedWet = wetBands[band]
+                                        * (1.0f + bandEnvelopeAmount * (envelopeGain - 1.0f));
+                auto gains = transientAwareMixGains(baseGains[band], transient);
+                gains.dry = juce::jmin(
+                    1.0f,
+                    gains.dry + transientThreadGain * kFusionTransientWeights[band] * transient);
+                mixedSample += gains.dry * sourceBands[band] + gains.wet * shapedWet;
+                shapedWetSample += shapedWet;
             }
 
-            wetEnergy += static_cast<double>(morphSample) * static_cast<double>(morphSample);
+            wetEnergy += static_cast<double>(shapedWetSample) * static_cast<double>(shapedWetSample);
             ++wetSampleCount;
-            lastWetOutputSample_[static_cast<size_t>(ch)] = morphSample;
-
-            buffer.setSample(ch, sample, dryGain * drySample + wetGain * morphSample);
+            buffer.setSample(ch, sample, mixedSample);
         }
 
-        if (followEnvelope)
-        {
-            sourceEnvelopeState_[static_cast<size_t>(ch)] = sourceEnvelope;
-            wetEnvelopeState_[static_cast<size_t>(ch)] = wetEnvelope;
-        }
-        else
-        {
-            sourceEnvelopeState_[static_cast<size_t>(ch)] = 0.0f;
-            wetEnvelopeState_[static_cast<size_t>(ch)] = 0.0f;
-        }
+        sourceEnvelopeState_[static_cast<size_t>(ch)] = sourceEnvelope;
+        sourceTransientSlowState_[static_cast<size_t>(ch)] = sourceSlowEnvelope;
         wetHighPassState1_[static_cast<size_t>(ch)] = highPassState1;
         wetHighPassState2_[static_cast<size_t>(ch)] = highPassState2;
     }
@@ -2138,7 +2368,7 @@ void NeuralMorphingAudioProcessor::processRealtimeMorphTokens(const TokenBlock& 
         return;
     }
 
-    matchWetLoudness(sourceAudio, morphedAudio);
+    matchWetLoudness(sourceAudio, morphedAudio, outputSampleRate);
 
     if (revision != morphRevision_.load(std::memory_order_acquire))
     {
@@ -2245,7 +2475,7 @@ bool NeuralMorphingAudioProcessor::renderMorphedAudioForInput(const juce::AudioB
             error,
             expectedRevision);
         if (rendered)
-            matchWetLoudness(encodeInput, morphedAudio);
+            matchWetLoudness(encodeInput, morphedAudio, outputSampleRate);
         return rendered;
     }
     catch (const std::exception& ex)

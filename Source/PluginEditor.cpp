@@ -258,7 +258,7 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     setupSlider(envelopeSlider_, "Envelope",
                 "Transfers the source dynamics to the morphed audio. Moderate values add definition; very high values can pump.");
     setupSlider(dryWetSlider_, "Dry/Wet",
-                "Linearly mixes source and morphed audio by volume. 0 is source only; 1 is morphed output only.");
+                "Morphs from source to palette through fine-to-coarse DAC layers, five spectral bands, and source-shaped dynamics. The endpoints remain strictly source and palette.");
     setupSlider(outputSlider_, "Output",
                 "Sets final output gain in dB. Large boosts increasingly drive the safety limiter.");
 
@@ -317,7 +317,7 @@ NeuralMorphingAudioProcessorEditor::NeuralMorphingAudioProcessorEditor(NeuralMor
     backendSelector_.setTooltip("Selects native ONNX, the Python bridge, or native with bridge fallback. This changes execution backend, not the parameter mapping.");
     processingModeSelector_.setTooltip("Quality Parity favors coherent matching. Live Realtime uses a faster search and can sound more animated.");
     bridgeCodecSelector_.setTooltip("Selects the bridge codec. DAC is supported by the current bridge; SpectroStream requires a compatible server.");
-    swapModeSelector_.setTooltip("Full Layer replaces complete DAC frames, RVQ Group creates a source/palette hybrid, and Palette Only guarantees palette-derived tokens.");
+    swapModeSelector_.setTooltip("Full Layer replaces complete DAC frames, RVQ Group varies replacement by layer, and Palette Only sets a fully palette-derived wet endpoint.");
     
     backendLabel_.setVisible(false);
     processingModeLabel_.setVisible(false);
