@@ -190,6 +190,8 @@ private:
     int lastKnownProcessingModeParam_ = -1;
     std::vector<float> sourceEnvelopeState_;
     std::vector<float> wetEnvelopeState_;
+    std::vector<float> wetHighPassInputState_;
+    std::vector<float> wetHighPassOutputState_;
     mutable juce::SpinLock morphCacheMutex_;
     std::atomic<bool> resetSmoothingPending_{ false };
     std::atomic<uint64_t> morphRevision_{ 1 };

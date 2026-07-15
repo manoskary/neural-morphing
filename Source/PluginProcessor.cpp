@@ -25,6 +25,23 @@ constexpr int kQualityHopSamplesDefault = 8192;
 constexpr int kQualityCrossfadeSamplesDefault = 4096;
 constexpr int kLiveCandidateCountDefault = 48;
 constexpr int kLiveBeamWidthDefault = 6;
+constexpr double kWetHighPassCutoffHz = 30.0;
+
+float wetHighPassCoefficient(double sampleRate)
+{
+    return sampleRate > 0.0
+               ? static_cast<float>(std::exp(-juce::MathConstants<double>::twoPi
+                                             * kWetHighPassCutoffHz / sampleRate))
+               : 0.0f;
+}
+
+float processWetHighPass(float input, float coefficient, float& previousInput, float& previousOutput)
+{
+    const float output = input - previousInput + coefficient * previousOutput;
+    previousInput = input;
+    previousOutput = output;
+    return output;
+}
 
 struct MorphDefaults
 {
@@ -213,6 +230,7 @@ void mixOfflineMorphedAudio(juce::AudioBuffer<float>& output,
     const float wetGain = dryWet;
     const float attack = sampleRate > 0.0 ? std::exp(-1.0f / (0.005f * static_cast<float>(sampleRate))) : 0.0f;
     const float release = sampleRate > 0.0 ? std::exp(-1.0f / (0.080f * static_cast<float>(sampleRate))) : 0.0f;
+    const float highPassCoefficient = wetHighPassCoefficient(sampleRate);
 
     for (int channel = 0; channel < output.getNumChannels(); ++channel)
     {
@@ -220,11 +238,14 @@ void mixOfflineMorphedAudio(juce::AudioBuffer<float>& output,
         const int wetChannel = juce::jmin(channel, wet.getNumChannels() - 1);
         float sourceEnvelope = 0.0f;
         float wetEnvelope = 0.0f;
+        float highPassInput = 0.0f;
+        float highPassOutput = 0.0f;
 
         for (int sample = 0; sample < output.getNumSamples(); ++sample)
         {
             const float sourceSample = source.getSample(sourceChannel, sample);
             float wetSample = sample < wet.getNumSamples() ? wet.getSample(wetChannel, sample) : 0.0f;
+            wetSample = processWetHighPass(wetSample, highPassCoefficient, highPassInput, highPassOutput);
 
             if (envelopeAmount > 0.0f)
             {
@@ -946,6 +967,8 @@ void NeuralMorphingAudioProcessor::resetMorphSmoothing()
     const auto channels = static_cast<size_t>(juce::jmax(1, getTotalNumOutputChannels()));
     sourceEnvelopeState_.assign(channels, 0.0f);
     wetEnvelopeState_.assign(channels, 0.0f);
+    wetHighPassInputState_.assign(channels, 0.0f);
+    wetHighPassOutputState_.assign(channels, 0.0f);
     lastWetOutputSample_.assign(channels, 0.0f);
     wetTransitionFromSample_.assign(channels, 0.0f);
     wetTransitionRemainingSamples_ = 0;
@@ -1620,9 +1643,10 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
     const float envelopeAmount = juce::jlimit(0.0f, 1.0f, getParam("envelopeFollow"));
     const bool followEnvelope = envelopeAmount > 0.0f && currentSampleRate_ > 0.0;
 
-    if (!followEnvelope
-        || sourceEnvelopeState_.size() < static_cast<size_t>(totalNumOutputChannels)
-        || wetEnvelopeState_.size() < static_cast<size_t>(totalNumOutputChannels))
+    if (sourceEnvelopeState_.size() < static_cast<size_t>(totalNumOutputChannels)
+        || wetEnvelopeState_.size() < static_cast<size_t>(totalNumOutputChannels)
+        || wetHighPassInputState_.size() < static_cast<size_t>(totalNumOutputChannels)
+        || wetHighPassOutputState_.size() < static_cast<size_t>(totalNumOutputChannels))
     {
         resetMorphSmoothing();
     }
@@ -1648,6 +1672,7 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
     const float release = followEnvelope
                               ? std::exp(-1.0f / (0.080f * static_cast<float>(currentSampleRate_)))
                               : 0.0f;
+    const float highPassCoefficient = wetHighPassCoefficient(currentSampleRate_);
 
     for (int ch = 0; ch < totalNumOutputChannels; ++ch)
     {
@@ -1655,6 +1680,8 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
         const int dryCh = juce::jmin(ch, dryBuffer.getNumChannels() - 1);
         float sourceEnvelope = sourceEnvelopeState_[static_cast<size_t>(ch)];
         float wetEnvelope = wetEnvelopeState_[static_cast<size_t>(ch)];
+        float highPassInput = wetHighPassInputState_[static_cast<size_t>(ch)];
+        float highPassOutput = wetHighPassOutputState_[static_cast<size_t>(ch)];
 
         for (int sample = 0; sample < numSamples; ++sample)
         {
@@ -1662,6 +1689,11 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
             const int morphLinearIndex = readStart + sample;
             const bool hasMorphSample = morphLinearIndex < morphSamples;
             float morphSample = hasMorphSample ? morphed.getSample(morphCh, morphLinearIndex) : 0.0f;
+            morphSample = processWetHighPass(
+                morphSample,
+                highPassCoefficient,
+                highPassInput,
+                highPassOutput);
 
             if (sample < transitionRemainingAtStart)
             {
@@ -1697,6 +1729,13 @@ void NeuralMorphingAudioProcessor::mixMorphedAudio(juce::AudioBuffer<float>& buf
             sourceEnvelopeState_[static_cast<size_t>(ch)] = sourceEnvelope;
             wetEnvelopeState_[static_cast<size_t>(ch)] = wetEnvelope;
         }
+        else
+        {
+            sourceEnvelopeState_[static_cast<size_t>(ch)] = 0.0f;
+            wetEnvelopeState_[static_cast<size_t>(ch)] = 0.0f;
+        }
+        wetHighPassInputState_[static_cast<size_t>(ch)] = highPassInput;
+        wetHighPassOutputState_[static_cast<size_t>(ch)] = highPassOutput;
     }
 
     if (morphSamples > 0)
