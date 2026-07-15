@@ -123,6 +123,7 @@ private:
     juce::File demoStatusFile_;
     juce::File demoRenderFile_;
     juce::String lastDemoStatusText_;
+    juce::uint32 lastDemoStatusWriteMs_ = 0;
     juce::String demoRenderResult_;
     bool demoRenderAttempted_ = false;
     std::atomic<bool> renderInProgress_{ false };

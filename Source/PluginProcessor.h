@@ -87,6 +87,7 @@ public:
     bool isBackendReady() const;
     float visualWetLevel() const { return visualWetLevel_.load(std::memory_order_acquire); }
     bool renderStandaloneSourceToFile(const juce::File& outputFile, juce::String& error);
+    void flushDemoRealtimeCapture();
     void armHighQualityRender();
 
     void setStandaloneSource(juce::AudioBuffer<float> buffer, double sampleRate, const juce::String& name);
@@ -190,6 +191,8 @@ private:
     int lastKnownProcessingModeParam_ = -1;
     std::vector<float> sourceEnvelopeState_;
     std::vector<float> wetEnvelopeState_;
+    std::vector<float> wetHighPassState1_;
+    std::vector<float> wetHighPassState2_;
     mutable juce::SpinLock morphCacheMutex_;
     std::atomic<bool> resetSmoothingPending_{ false };
     std::atomic<uint64_t> morphRevision_{ 1 };
@@ -198,9 +201,18 @@ private:
     std::atomic<int> lastMatchedIndex_{ -1 };
     int morphUpdateCountdownSamples_ = 0;
     juce::AudioBuffer<float> lastRealtimeMorphBlock_;
+    juce::AudioBuffer<float> pendingRealtimeMorphBlock_;
     bool hasLastRealtimeMorphBlock_ = false;
+    bool hasPendingRealtimeMorphBlock_ = false;
     int lastRealtimeMorphReadPosition_ = 0;
     bool lastRealtimeMorphWasUnderrun_ = false;
+    int wetLoopStartPosition_ = 0;
+    unsigned int wetLoopCycle_ = 0;
+    std::vector<float> lastWetOutputSample_;
+    std::vector<float> wetTransitionFromSample_;
+    int wetTransitionRemainingSamples_ = 0;
+    int wetTransitionTotalSamples_ = 0;
+    bool wetTransitionPending_ = false;
     std::atomic<int> morphWetState_{ 0 };
     std::atomic<int> wetMixPercent_{ 0 };
     std::atomic<int> morphTokenChangePercent_{ -1 };
@@ -229,6 +241,10 @@ private:
     int64_t standaloneSourcePosition_ = 0;
     bool standaloneSourceLoaded_ = false;
     bool deterministicDemoPlayback_ = false;
+
+    juce::TimeSliceThread demoCaptureThread_{ "Realtime Capture" };
+    std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> demoCaptureWriter_;
+    std::atomic<int64_t> demoCaptureSamplesRemaining_{ 0 };
 
     ActiveBackendKind activeBackendKind_ = ActiveBackendKind::Stub;
     juce::String backendFallbackReason_;

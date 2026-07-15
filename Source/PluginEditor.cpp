@@ -930,6 +930,7 @@ void NeuralMorphingAudioProcessorEditor::sliderDragEnded(juce::Slider* slider)
 
 void NeuralMorphingAudioProcessorEditor::timerCallback()
 {
+    processor_.flushDemoRealtimeCapture();
     const float wetDb = juce::Decibels::gainToDecibels(processor_.visualWetLevel(), -80.0f);
     const float pulseTarget = wetDb > -42.0f ? juce::jlimit(0.0f, 1.0f, (wetDb + 42.0f) / 36.0f) : 0.0f;
     const float smoothing = pulseTarget > backgroundPulse_ ? 0.42f : 0.10f;
@@ -980,10 +981,13 @@ void NeuralMorphingAudioProcessorEditor::timerCallback()
         backendStatus += " | render=" + demoRenderResult_;
 
     statusDisplayLabel_.setText(backendStatus, juce::dontSendNotification);
-    if (demoStatusFile_ != juce::File{} && backendStatus != lastDemoStatusText_)
+    const auto nowMs = juce::Time::getMillisecondCounter();
+    const bool statusWriteDue = lastDemoStatusWriteMs_ == 0 || nowMs - lastDemoStatusWriteMs_ >= 500;
+    if (demoStatusFile_ != juce::File{} && statusWriteDue && backendStatus != lastDemoStatusText_)
     {
         demoStatusFile_.replaceWithText(backendStatus);
         lastDemoStatusText_ = backendStatus;
+        lastDemoStatusWriteMs_ = nowMs;
     }
 
     if (showStandaloneSource_)

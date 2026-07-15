@@ -191,9 +191,8 @@ The native backend does not need the Python bridge while running, but it require
 On Windows, configure it with the Visual Studio generator:
 
 ```powershell
-cmake -S . -B build-onnx -G "Visual Studio 17 2022" -A x64 -DNEURAL_MORPHING_ENABLE_ONNX=ON -DNM_WITH_PYBRIDGE=OFF -DONNXRUNTIME_ROOT="C:\path\to\onnxruntime"
+cmake -S . -B build-onnx -G "Visual Studio 17 2022" -A x64 -DNEURAL_MORPHING_ENABLE_ONNX=ON -DNM_WITH_PYBRIDGE=OFF -DONNXRUNTIME_ROOT="C:\path\to\onnxruntime" -DNEURAL_MORPHING_DAC_MODEL_DIR="C:\path\to\exported-dac-model"
 cmake --build build-onnx --config Release --target NeuralMorphing_Standalone NeuralMorphing_VST3
-$env:NEURAL_MORPHING_MODEL_DIR="C:\path\to\exported-dac-model"
 & ".\build-onnx\NeuralMorphing_artefacts\Release\Standalone\Neural Morphing.exe"
 ```
 
@@ -202,14 +201,14 @@ On macOS or Linux, use the same compiler setup as the bridge build:
 ```bash
 cmake -S . -B build-onnx -DCMAKE_BUILD_TYPE=Release \
   -DNEURAL_MORPHING_ENABLE_ONNX=ON -DNM_WITH_PYBRIDGE=OFF \
-  -DONNXRUNTIME_ROOT=/path/to/onnxruntime
+  -DONNXRUNTIME_ROOT=/path/to/onnxruntime \
+  -DNEURAL_MORPHING_DAC_MODEL_DIR=/path/to/exported-dac-model
 cmake --build build-onnx --target NeuralMorphing_Standalone NeuralMorphing_VST3 --parallel
-export NEURAL_MORPHING_MODEL_DIR=/path/to/exported-dac-model
 ```
 
-Keep the ONNX Runtime shared library installed or discoverable from its SDK `lib` directory when launching the plugin or Standalone.
+The build bundles the DAC files beside the Standalone and inside the VST3. `NEURAL_MORPHING_MODEL_DIR` can still override that location. Keep the ONNX Runtime shared library installed or discoverable from its SDK `lib` directory when launching on macOS or Linux; Windows builds copy `onnxruntime.dll` automatically.
 
-The model directory must contain `encoder.onnx`, `decoder.onnx`, `embeddings.npy`, and `metadata.json`. `tools/export_dac.py` creates this layout.
+The model directory must contain `encoder.onnx`, `decoder.onnx`, `embeddings.bin`, and `metadata.json`. `tools/export_dac.py` creates this layout.
 
 ## Developer Validation
 
